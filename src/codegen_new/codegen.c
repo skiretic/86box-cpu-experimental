@@ -808,6 +808,12 @@ codegen_skip:
             uop_CMP_IMM_JZ(ir, IREG_sf_exc, (uint32_t) 1, codegen_exit_rout);
     }
     codegen_flags_changed = 0;
+    /* MOV CRn, LMSW and LOADALL can set CR0.TS, MP or EM without ending the
+       block, so the next FPU or MMX instruction has to check CR0 again. */
+    if (op_table == x86_dynarec_opcodes_0f && (opcode == 0x01 || opcode == 0x05 || opcode == 0x07 || opcode == 0x22)) {
+        codegen_fpu_entered = 0;
+        codegen_mmx_entered = 0;
+    }
     /* The handler gets the bytes after the opcode through fetchdat, and reads
        anything further from memory as it runs. Marking more than fetchdat
        covers would claim the data that often follows an instruction such as
