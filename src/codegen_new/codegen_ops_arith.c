@@ -10,6 +10,7 @@
 #include "x86seg.h"
 #include "386_common.h"
 #include "codegen.h"
+#include "codegen_accumulate.h"
 #include "codegen_ir.h"
 #include "codegen_ops.h"
 #include "codegen_ops_arith.h"
@@ -2497,6 +2498,9 @@ imul_rebuild_flags(ir_data_t *ir)
     codegen_flags_changed = 1;
 }
 
+/*The interpreter path subtracted the cycles accumulated so far before IMUL
+  ran, so a fault in it, or in a later instruction of the block, was taken
+  with them charged. The compiled forms flush at the same point.*/
 static int
 imul_supported(void)
 {
@@ -2543,6 +2547,7 @@ ropIMUL_w_rm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
     imul_generate(ir, IREG_16(dest_reg), IREG_16(dest_reg), src_reg);
@@ -2559,6 +2564,7 @@ ropIMUL_l_rm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
     imul_generate(ir, IREG_32(dest_reg), IREG_32(dest_reg), src_reg);
@@ -2576,6 +2582,7 @@ ropIMUL_w_rm_imm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
     if (block->flags & CODEBLOCK_NO_IMMEDIATES)
@@ -2598,6 +2605,7 @@ ropIMUL_l_rm_imm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
     if (block->flags & CODEBLOCK_NO_IMMEDIATES)
@@ -2621,6 +2629,7 @@ ropIMUL_w_rm_imm8(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uin
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
     if (block->flags & CODEBLOCK_NO_IMMEDIATES) {
@@ -2644,6 +2653,7 @@ ropIMUL_l_rm_imm8(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uin
         return 0;
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+    codegen_accumulate_flush(ir);
     imul_rebuild_flags(ir);
     src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
     if (block->flags & CODEBLOCK_NO_IMMEDIATES) {

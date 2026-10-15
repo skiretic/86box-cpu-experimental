@@ -148,6 +148,9 @@ ropWAIT(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSE
     if (fpu_softfloat)
         return 0;
 
+    /*As on the interpreter path, the cycles so far are charged before WAIT
+      can fault.*/
+    codegen_accumulate_flush(ir);
     if (!codegen_fpu_entered) {
         uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
         uop_MOV_REG_PTR(ir, IREG_temp0, &cr0);
