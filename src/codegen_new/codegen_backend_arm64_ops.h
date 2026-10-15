@@ -145,6 +145,8 @@ void host_arm64_FRINTX_D(codeblock_t *block, int dst_reg, int src_reg);
 void host_arm64_FSQRT_D(codeblock_t *block, int dst_reg, int src_reg);
 void host_arm64_FSQRT_S(codeblock_t *block, int dst_reg, int src_reg);
 
+void host_arm64_LDP_IMM_W(codeblock_t *block, int dest_reg1, int dest_reg2, int base_reg, int offset);
+void host_arm64_LDP_IMM_X(codeblock_t *block, int dest_reg1, int dest_reg2, int base_reg, int offset);
 void host_arm64_LDP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);
 
 void host_arm64_LDR_IMM_W(codeblock_t *block, int dest_reg, int base_reg, int offset);
@@ -296,6 +298,7 @@ void host_arm64_call(codeblock_t *block, void *dst_addr);
 void host_arm64_jump(codeblock_t *block, uintptr_t dst_addr);
 void host_arm64_mov_imm(codeblock_t *block, int reg, uint32_t imm_data);
 
+#define in_range7_w(offset)  (((offset) >= -0x100) && ((offset) < (0x100)) && !((offset) &3))
 #define in_range7_x(offset)  (((offset) >= -0x200) && ((offset) < (0x200)) && !((offset) &7))
 #define in_range12_b(offset) (((offset) >= 0) && ((offset) < 0x1000))
 #define in_range12_h(offset) (((offset) >= 0) && ((offset) < 0x2000) && !((offset) &1))
