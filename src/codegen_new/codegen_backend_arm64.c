@@ -903,7 +903,9 @@ build_link_routine(codeblock_t *block)
     uint32_t *miss[LINK_MAX_MISS];
     int       nr_miss = 0;
     uint32_t *slot1;
+    uint32_t *slot2;
     uint32_t *found;
+    uint32_t *found1;
     uint32_t *nmi_set;
     uint32_t *nmi_ok;
     uint32_t *irq_ok;
@@ -964,9 +966,16 @@ build_link_routine(codeblock_t *block)
     host_arm64_ADDX_IMM(block, REG_X1, REG_X0, sizeof(codegen_link_slot_t));
     host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X1, LINK_SLOT(exit_pc));
     host_arm64_CMPX_REG(block, REG_X5, REG_X4);
+    slot2  = host_arm64_BNE_SHORT_(block);
+    found1 = host_arm64_CBNZ_SHORT_(block, REG_X15);
+    host_arm64_short_branch_set_offset(slot2, &block_write_data[block_pos]);
+    host_arm64_ADDX_IMM(block, REG_X1, REG_X0, 2 * sizeof(codegen_link_slot_t));
+    host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X1, LINK_SLOT(exit_pc));
+    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
     miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X15);
     host_arm64_short_branch_set_offset(found, &block_write_data[block_pos]);
+    host_arm64_short_branch_set_offset(found1, &block_write_data[block_pos]);
 
     /*Target not freed or changed since the slot was filled. W6 = the slot's
       status | npxc << 16*/
@@ -1110,7 +1119,7 @@ build_link_routine(codeblock_t *block)
     host_arm64_STR_IMM_W(block, REG_WZR, REG_X3, 0);
     host_arm64_BR(block, REG_X15);
 
-    /*Miss: the block's own epilogue, X0 still the slot pair*/
+    /*Miss: the block's own epilogue, X0 still the slots*/
     miss_dest = &block_write_data[block_pos];
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
@@ -1198,7 +1207,7 @@ codegen_backend_init(void)
 
     codegen_exit_rout = &block_write_data[block_pos];
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
-    /*No slot pair: a block leaving from here is never linked*/
+    /*No slots: a block leaving from here is never linked*/
     host_arm64_MOVZ_IMM(block, REG_W0, 0);
 #    endif
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);

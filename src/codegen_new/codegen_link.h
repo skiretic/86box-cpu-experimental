@@ -4,18 +4,20 @@
 #ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 
 /*Block linking. A block that ends normally branches to a shared routine
-  with x0 = its own slot pair. If cpu_state.pc and the CS base match a slot,
+  with x0 = its own slots. If cpu_state.pc and the CS base match a slot,
   the routine repeats, inline, every check exec386_dynarec() and
   exec386_dynarec_dyn() would make between this block and the next one, and
   if they all pass it does their stores and jumps to the next block's link
   entry, skipping its register saves. Anything else returns to C as before,
-  still with x0 = the slot pair (codegen_exit_rout returns NULL).
+  still with x0 = the slots (codegen_exit_rout returns NULL).
 
   A slot never needs cutting to stay correct: it is checked on every use,
   and link_gen changes whenever the target block is freed, recompiled or has
   any field below changed.*/
 
-#define CODEGEN_LINK_SLOTS 2
+/*Three, so a block whose end and two mid-block exits take turns still links
+  every one of them.*/
+#define CODEGEN_LINK_SLOTS 3
 
 typedef struct codegen_link_slot_t {
     uint32_t     exit_pc;     /*cpu_state.pc at the exit*/

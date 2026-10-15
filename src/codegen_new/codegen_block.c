@@ -99,7 +99,7 @@ codegen_link_block_changed(codeblock_t *block)
     block->link_gen = link_gen_last;
 }
 
-/*Empty the slot pair used by the block's own exit.*/
+/*Empty the slots used by the block's own exits.*/
 static void
 link_slots_clear(codeblock_t *block)
 {
@@ -141,7 +141,10 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
         slot = &from[0];
     else if (from[1].exit_pc == cpu_state.pc && from[1].exit_cs == cs)
         slot = &from[1];
+    else if (from[2].exit_pc == cpu_state.pc && from[2].exit_cs == cs)
+        slot = &from[2];
     else {
+        from[2] = from[1];
         from[1] = from[0];
         slot    = &from[0];
     }
