@@ -2475,15 +2475,18 @@ ropINCDEC(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fe
 
 /*IMUL keeps SF/ZF/AF/PF from the previous result and sets CF and OF together
   when the signed product does not fit in the destination, as the interpreter
-  does. The flags are rebuilt before anything is loaded into a temporary, as
-  temporaries do not survive the call. Afterwards flags_op is FLAGS_UNKNOWN,
-  so a following IMUL with no flag-setting instruction in between skips the
-  call.*/
+  does. flags_rebuild() writes only flags and flags_op, so it is called with
+  the cached registers written back but left loaded, and those two are
+  reloaded after it. Afterwards flags_op is FLAGS_UNKNOWN, so a following
+  IMUL with no flag-setting instruction in between skips the call.*/
 static void
 imul_rebuild_flags(ir_data_t *ir)
 {
-    if (!codegen_flags_changed || cpu_state.flags_op != FLAGS_UNKNOWN)
-        uop_CALL_FUNC(ir, jit_flags_rebuild);
+    if (!codegen_flags_changed || cpu_state.flags_op != FLAGS_UNKNOWN) {
+        uop_CALL_FUNC_ORDERED(ir, jit_flags_rebuild);
+        uop_MOVZX_REG_PTR_16(ir, IREG_flags, &cpu_state.flags);
+        uop_MOV_IMM(ir, IREG_flags_op, FLAGS_UNKNOWN);
+    }
     codegen_flags_changed = 1;
 }
 

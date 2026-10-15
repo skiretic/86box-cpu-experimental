@@ -115,6 +115,9 @@
 /*UOP_CALL_REP_STRING - call REP string routine at p with immediate, exit block if it returns non-zero.
   The routine reads and writes the guest registers in cpu_state, so the caller reloads them*/
 #define UOP_CALL_REP_STRING (UOP_TYPE_PARAMS_POINTER | UOP_TYPE_PARAMS_IMM | 0x3e | UOP_TYPE_ORDER_BARRIER)
+/*UOP_CALL_FUNC_ORDERED - call C function at p with registers written back but left loaded.
+  The function must not change anything the IR caches unless the caller reloads it*/
+#define UOP_CALL_FUNC_ORDERED (UOP_TYPE_PARAMS_POINTER | 0x3f | UOP_TYPE_ORDER_BARRIER)
 /*UOP_MEM_LOAD_ABS - dest_reg = src_reg_a:[immediate]*/
 #define UOP_MEM_LOAD_ABS (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_IMM | 0x40 | UOP_TYPE_ORDER_BARRIER)
 /*UOP_MEM_LOAD_REG - dest_reg = src_reg_a:[src_reg_b]*/
@@ -729,6 +732,7 @@ extern int codegen_fp_enter(void);
 
 #define uop_CALL_FUNC(ir, p)                                     uop_gen_pointer(UOP_CALL_FUNC, ir, p)
 #define uop_CALL_FUNC_RESULT(ir, dst_reg, p)                     uop_gen_reg_dst_pointer(UOP_CALL_FUNC_RESULT, ir, dst_reg, p)
+#define uop_CALL_FUNC_ORDERED(ir, p)                             uop_gen_pointer(UOP_CALL_FUNC_ORDERED, ir, p)
 #define uop_CALL_INSTRUCTION_FUNC(ir, p, imm)                    uop_gen_pointer_imm(UOP_CALL_INSTRUCTION_FUNC, ir, p, imm)
 #define uop_CALL_REP_STRING(ir, p, imm)                          uop_gen_pointer_imm(UOP_CALL_REP_STRING, ir, p, imm)
 
