@@ -279,7 +279,14 @@ rebuild_c(ir_data_t *ir)
     }
 
     if (needs_rebuild) {
+#if defined __aarch64__ || defined _M_ARM64
+        /*flags_rebuild_c() writes only flags, so the cached registers are
+          written back but left loaded, and flags is reloaded after it.*/
+        uop_CALL_FUNC_ORDERED(ir, jit_flags_rebuild_c);
+        uop_MOVZX_REG_PTR_16(ir, IREG_flags, &cpu_state.flags);
+#else
         uop_CALL_FUNC(ir, jit_flags_rebuild_c);
+#endif
     }
 }
 
