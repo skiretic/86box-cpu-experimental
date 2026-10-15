@@ -36,7 +36,7 @@ emit_flags_rebuild_zpna(ir_data_t *ir)
                 break;
         }
     }
-    uop_CALL_FUNC(ir, jit_flags_rebuild_zpna);
+    call_flags_rebuild(ir, jit_flags_rebuild_zpna);
 }
 
 static uint32_t

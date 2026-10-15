@@ -588,21 +588,21 @@ ropLxS(LSS, &cpu_state.seg_ss)
 uint32_t
 ropCLC(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
 {
-    uop_CALL_FUNC(ir, jit_flags_rebuild);
+    call_flags_rebuild(ir, jit_flags_rebuild);
     uop_AND_IMM(ir, IREG_flags, IREG_flags, ~C_FLAG);
     return op_pc;
 }
 uint32_t
 ropCMC(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
 {
-    uop_CALL_FUNC(ir, jit_flags_rebuild);
+    call_flags_rebuild(ir, jit_flags_rebuild);
     uop_XOR_IMM(ir, IREG_flags, IREG_flags, C_FLAG);
     return op_pc;
 }
 uint32_t
 ropSTC(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
 {
-    uop_CALL_FUNC(ir, jit_flags_rebuild);
+    call_flags_rebuild(ir, jit_flags_rebuild);
     uop_OR_IMM(ir, IREG_flags, IREG_flags, C_FLAG);
     return op_pc;
 }
