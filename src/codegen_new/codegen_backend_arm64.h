@@ -26,6 +26,7 @@
    iteration that the link routine does not repeat. */
 #if !defined(USE_GDBSTUB) && !defined(USE_ACYCS) && !defined(USE_DEBUG_REGS_486)
 #    define CODEGEN_BACKEND_HAS_BLOCK_LINK
+void codegen_link_exit(codeblock_t *block);
 #endif
 
 void host_arm64_BLR(codeblock_t *block, int addr_reg);

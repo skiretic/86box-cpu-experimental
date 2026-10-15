@@ -1264,14 +1264,24 @@ codegen_backend_prologue(codeblock_t *block)
     }
 }
 
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+/*Leave the block with every register written back and cpu_state.pc set, as
+  at its end. The link routine returns through the same register restores on
+  a miss.*/
+void
+codegen_link_exit(codeblock_t *block)
+{
+    codegen_alloc(block, 20);
+    host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) codegen_link_slots[get_block_nr(block)]);
+    host_arm64_B(block, codegen_link_rout);
+}
+#    endif
+
 void
 codegen_backend_epilogue(codeblock_t *block)
 {
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
-    /*The link routine returns through the same register restores on a miss*/
-    codegen_alloc(block, 20);
-    host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) codegen_link_slots[get_block_nr(block)]);
-    host_arm64_B(block, codegen_link_rout);
+    codegen_link_exit(block);
 #    else
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
