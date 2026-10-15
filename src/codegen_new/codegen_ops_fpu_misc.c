@@ -136,3 +136,27 @@ ropFXCH(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), uint3
 
     return op_pc;
 }
+
+/*WAIT faults only when CR0.MP and CR0.TS are both set. Once the block has
+  passed the FPU entry check TS is clear, so WAIT does nothing. Under
+  softfloat WAIT also delivers pending exceptions, which is left to the
+  interpreter.*/
+uint32_t
+ropWAIT(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
+{
+#if defined __aarch64__ || defined _M_ARM64
+    if (fpu_softfloat)
+        return 0;
+
+    if (!codegen_fpu_entered) {
+        uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+        uop_MOV_REG_PTR(ir, IREG_temp0, &cr0);
+        uop_AND_IMM(ir, IREG_temp0, IREG_temp0, 0xa);
+        uop_CMP_IMM_JZ(ir, IREG_temp0, 0xa, codegen_int7_rout);
+    }
+
+    return op_pc;
+#else
+    return 0;
+#endif
+}

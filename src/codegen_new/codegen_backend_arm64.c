@@ -48,6 +48,7 @@ void *codegen_fp_round_quad;
 
 void *codegen_gpf_rout;
 void *codegen_exit_rout;
+void *codegen_int7_rout;
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
     { REG_X19, 0},
@@ -314,7 +315,7 @@ codegen_backend_init(void)
     codegen_fp_round_quad = &block_write_data[block_pos];
     build_fp_round_routine(block, 1);
 
-    codegen_alloc(block, 80);
+    codegen_alloc(block, 128);
     codegen_gpf_rout = &block_write_data[block_pos];
     host_arm64_mov_imm(block, REG_ARG0, 0);
     host_arm64_mov_imm(block, REG_ARG1, 0);
@@ -328,6 +329,12 @@ codegen_backend_init(void)
     host_arm64_LDP_POSTIDX_X(block, REG_X27, REG_X28, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
     host_arm64_RET(block, REG_X30);
+
+    /*Device-not-available fault, for checks that branch here with oldpc set*/
+    codegen_int7_rout = &block_write_data[block_pos];
+    host_arm64_mov_imm(block, REG_ARG0, 7);
+    host_arm64_call(block, (void *) x86_int);
+    host_arm64_B(block, codegen_exit_rout);
 
     block_write_data = NULL;
 
