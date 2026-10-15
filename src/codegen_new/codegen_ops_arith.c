@@ -2522,7 +2522,7 @@ imul_load_rm(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op_3
     uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
     target_seg = codegen_generate_ea(ir, op_ea_seg, fetchdat, op_ssegs, op_pc, op_32, 0);
     codegen_check_seg_read(block, ir, target_seg);
-    uop_MEM_LOAD_REG(ir, is_32 ? IREG_temp0 : IREG_temp0_W, ireg_seg_base(target_seg), IREG_eaaddr);
+    uop_MEM_LOAD_REG_EA(ir, is_32 ? IREG_temp0 : IREG_temp0_W, ireg_seg_base(target_seg), IREG_eaaddr);
     return is_32 ? IREG_temp0 : IREG_temp0_W;
 }
 
