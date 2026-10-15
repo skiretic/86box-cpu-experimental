@@ -194,6 +194,54 @@ codegen_ANDN(codeblock_t *block, uop_t *uop)
 }
 
 static int
+codegen_IMUL(codeblock_t *block, uop_t *uop)
+{
+    int dest_reg   = HOST_REG_GET(uop->dest_reg_a_real);
+    int src_reg_a  = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
+    int dest_size  = IREG_GET_SIZE(uop->dest_reg_a_real);
+    int src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
+    int src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
+
+    if (REG_IS_L(dest_size) && REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
+        host_arm64_MUL_W(block, dest_reg, src_reg_a, src_reg_b);
+    } else if (REG_IS_W(dest_size) && REG_IS_W(src_size_a) && REG_IS_W(src_size_b)) {
+        /*The low 16 bits of a product depend only on the low 16 bits of
+          each operand, so the rest of the host registers does not matter*/
+        host_arm64_MUL_W(block, REG_TEMP, src_reg_a, src_reg_b);
+        host_arm64_BFI(block, dest_reg, REG_TEMP, 0, 16);
+    } else
+        fatal("IMUL %02x %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real, uop->src_reg_b_real);
+
+    return 0;
+}
+static int
+codegen_IMUL_OVERFLOW(codeblock_t *block, uop_t *uop)
+{
+    int dest_reg   = HOST_REG_GET(uop->dest_reg_a_real);
+    int src_reg_a  = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
+    int dest_size  = IREG_GET_SIZE(uop->dest_reg_a_real);
+    int src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
+    int src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
+
+    if (REG_IS_L(dest_size) && REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
+        host_arm64_SMULL_X(block, REG_TEMP, src_reg_a, src_reg_b);
+        host_arm64_CMPX_REG_SXTW(block, REG_TEMP, REG_TEMP);
+        host_arm64_CSET_NE(block, dest_reg);
+    } else if (REG_IS_L(dest_size) && REG_IS_W(src_size_a) && REG_IS_W(src_size_b)) {
+        host_arm64_SBFX(block, REG_TEMP, src_reg_a, 0, 16);
+        host_arm64_SBFX(block, REG_TEMP2, src_reg_b, 0, 16);
+        host_arm64_MUL_W(block, REG_TEMP, REG_TEMP, REG_TEMP2);
+        host_arm64_CMP_REG_SXTH(block, REG_TEMP, REG_TEMP);
+        host_arm64_CSET_NE(block, dest_reg);
+    } else
+        fatal("IMUL_OVERFLOW %02x %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real, uop->src_reg_b_real);
+
+    return 0;
+}
+
+static int
 codegen_CALL_FUNC(codeblock_t *block, uop_t *uop)
 {
     host_arm64_call(block, uop->p);
@@ -3254,6 +3302,12 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_ANDN &
         UOP_MASK]
     = codegen_ANDN,
+    [UOP_IMUL &
+        UOP_MASK]
+    = codegen_IMUL,
+    [UOP_IMUL_OVERFLOW &
+        UOP_MASK]
+    = codegen_IMUL_OVERFLOW,
     [UOP_OR &
         UOP_MASK]
     = codegen_OR,

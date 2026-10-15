@@ -108,6 +108,10 @@
 #define UOP_XOR_IMM (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_IMM | 0x3a)
 /*UOP_ANDN - dest_reg = ~src_reg_a & src_reg_b*/
 #define UOP_ANDN (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_IMM | 0x3b)
+/*UOP_IMUL - dest_reg = src_reg_a * src_reg_b, low half*/
+#define UOP_IMUL (UOP_TYPE_PARAMS_REGS | 0x3c)
+/*UOP_IMUL_OVERFLOW - dest_reg = 1 if the signed product of src_reg_a and src_reg_b does not fit in their size, else 0*/
+#define UOP_IMUL_OVERFLOW (UOP_TYPE_PARAMS_REGS | 0x3d)
 /*UOP_MEM_LOAD_ABS - dest_reg = src_reg_a:[immediate]*/
 #define UOP_MEM_LOAD_ABS (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_IMM | 0x40 | UOP_TYPE_ORDER_BARRIER)
 /*UOP_MEM_LOAD_REG - dest_reg = src_reg_a:[src_reg_b]*/
@@ -700,6 +704,8 @@ extern int codegen_fp_enter(void);
 #define uop_AND(ir, dst_reg, src_reg_a, src_reg_b)               uop_gen_reg_dst_src2(UOP_AND, ir, dst_reg, src_reg_a, src_reg_b)
 #define uop_AND_IMM(ir, dst_reg, src_reg, imm)                   uop_gen_reg_dst_src_imm(UOP_AND_IMM, ir, dst_reg, src_reg, imm)
 #define uop_ANDN(ir, dst_reg, src_reg_a, src_reg_b)              uop_gen_reg_dst_src2(UOP_ANDN, ir, dst_reg, src_reg_a, src_reg_b)
+#define uop_IMUL(ir, dst_reg, src_reg_a, src_reg_b)              uop_gen_reg_dst_src2(UOP_IMUL, ir, dst_reg, src_reg_a, src_reg_b)
+#define uop_IMUL_OVERFLOW(ir, dst_reg, src_reg_a, src_reg_b)     uop_gen_reg_dst_src2(UOP_IMUL_OVERFLOW, ir, dst_reg, src_reg_a, src_reg_b)
 #define uop_OR(ir, dst_reg, src_reg_a, src_reg_b)                uop_gen_reg_dst_src2(UOP_OR, ir, dst_reg, src_reg_a, src_reg_b)
 #define uop_OR_IMM(ir, dst_reg, src_reg, imm)                    uop_gen_reg_dst_src_imm(UOP_OR_IMM, ir, dst_reg, src_reg, imm)
 #define uop_SUB(ir, dst_reg, src_reg_a, src_reg_b)               uop_gen_reg_dst_src2(UOP_SUB, ir, dst_reg, src_reg_a, src_reg_b)

@@ -95,7 +95,10 @@
 #    define OPCODE_AND_ROR            (0x056 << 21)
 #    define OPCODE_ANDS_LSL           (0x350 << 21)
 #    define OPCODE_CMP_LSL            (0x358 << 21)
+#    define OPCODE_CMP_SXTH           (0x6b20a000)
+#    define OPCODE_CMPX_SXTW          (0xeb20c000)
 #    define OPCODE_CSEL               (0x0d4 << 21)
+#    define OPCODE_CSINC              (0x1a800400)
 #    define OPCODE_EOR_LSL            (0x250 << 21)
 #    define OPCODE_ORR_ASR            (0x154 << 21)
 #    define OPCODE_ORR_LSL            (0x150 << 21)
@@ -176,6 +179,7 @@
 #    define OPCODE_LSR                (0x1ac02400)
 #    define OPCODE_MSR_FPCR           (0xd51b4400)
 #    define OPCODE_MUL_V4H            (0x0e609c00)
+#    define OPCODE_MUL_W              (0x1b007c00)
 #    define OPCODE_NOP                (0xd503201f)
 #    define OPCODE_ORR_V              (0x0ea01c00)
 #    define OPCODE_RET                (0xd65f0000)
@@ -197,6 +201,7 @@
 #    define OPCODE_SHL_VQ             (0x4f005400)
 #    define OPCODE_SHRN               (0x0f008400)
 #    define OPCODE_SMULL_V4S_4H       (0x0e60c000)
+#    define OPCODE_SMULL_X            (0x9b207c00)
 #    define OPCODE_SSHR_VD            (0x0f000400)
 #    define OPCODE_SSHR_VQ            (0x4f000400)
 #    define OPCODE_SRSHR_VQ           (0x4f302400)
@@ -834,6 +839,24 @@ host_arm64_CSEL_VS(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg
 }
 
 void
+host_arm64_CMP_REG_SXTH(codeblock_t *block, int src_n_reg, int src_m_reg)
+{
+    codegen_addlong(block, OPCODE_CMP_SXTH | Rd(0x1f) | Rn(src_n_reg) | Rm(src_m_reg));
+}
+void
+host_arm64_CMPX_REG_SXTW(codeblock_t *block, int src_n_reg, int src_m_reg)
+{
+    codegen_addlong(block, OPCODE_CMPX_SXTW | Rd(0x1f) | Rn(src_n_reg) | Rm(src_m_reg));
+}
+
+/*CSET is CSINC from the zero register with the inverted condition*/
+void
+host_arm64_CSET_NE(codeblock_t *block, int dst_reg)
+{
+    codegen_addlong(block, OPCODE_CSINC | CSEL_COND(COND_EQ) | Rd(dst_reg) | Rn(0x1f) | Rm(0x1f));
+}
+
+void
 host_arm64_DUP_V2S(codeblock_t *block, int dst_reg, int src_n_reg, int element)
 {
     codegen_addlong(block, OPCODE_DUP_V2S | Rd(dst_reg) | Rn(src_n_reg) | DUP_ELEMENT(element));
@@ -1254,6 +1277,11 @@ host_arm64_MUL_V4H(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg
 {
     codegen_addlong(block, OPCODE_MUL_V4H | Rd(dst_reg) | Rn(src_n_reg) | Rm(src_m_reg));
 }
+void
+host_arm64_MUL_W(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg)
+{
+    codegen_addlong(block, OPCODE_MUL_W | Rd(dst_reg) | Rn(src_n_reg) | Rm(src_m_reg));
+}
 
 void
 host_arm64_NOP(codeblock_t *block)
@@ -1337,6 +1365,11 @@ void
 host_arm64_SMULL_V4S_4H(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg)
 {
     codegen_addlong(block, OPCODE_SMULL_V4S_4H | Rd(dst_reg) | Rn(src_n_reg) | Rm(src_m_reg));
+}
+void
+host_arm64_SMULL_X(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg)
+{
+    codegen_addlong(block, OPCODE_SMULL_X | Rd(dst_reg) | Rn(src_n_reg) | Rm(src_m_reg));
 }
 
 void

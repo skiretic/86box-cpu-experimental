@@ -2472,3 +2472,178 @@ ropINCDEC(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fe
 
     return op_pc + 1;
 }
+
+/*IMUL keeps SF/ZF/AF/PF from the previous result and sets CF and OF together
+  when the signed product does not fit in the destination, as the interpreter
+  does. The flags are rebuilt before anything is loaded into a temporary, as
+  temporaries do not survive the call. Afterwards flags_op is FLAGS_UNKNOWN,
+  so a following IMUL with no flag-setting instruction in between skips the
+  call.*/
+static void
+imul_rebuild_flags(ir_data_t *ir)
+{
+    if (!codegen_flags_changed || cpu_state.flags_op != FLAGS_UNKNOWN)
+        uop_CALL_FUNC(ir, jit_flags_rebuild);
+    codegen_flags_changed = 1;
+}
+
+static int
+imul_supported(void)
+{
+#if defined __aarch64__ || defined _M_ARM64
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static int
+imul_load_rm(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op_32, uint32_t *op_pc, int is_32)
+{
+    x86seg *target_seg;
+
+    if ((fetchdat & 0xc0) == 0xc0)
+        return is_32 ? IREG_32(fetchdat & 7) : IREG_16(fetchdat & 7);
+
+    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    target_seg = codegen_generate_ea(ir, op_ea_seg, fetchdat, op_ssegs, op_pc, op_32, 0);
+    codegen_check_seg_read(block, ir, target_seg);
+    uop_MEM_LOAD_REG(ir, is_32 ? IREG_temp0 : IREG_temp0_W, ireg_seg_base(target_seg), IREG_eaaddr);
+    return is_32 ? IREG_temp0 : IREG_temp0_W;
+}
+
+static void
+imul_generate(ir_data_t *ir, int dest_reg, int src_reg_a, int src_reg_b)
+{
+    uop_IMUL_OVERFLOW(ir, IREG_temp2, src_reg_a, src_reg_b);
+    uop_IMUL(ir, dest_reg, src_reg_a, src_reg_b);
+    uop_SHL_IMM(ir, IREG_temp3, IREG_temp2, 11);
+    uop_OR(ir, IREG_temp3, IREG_temp3, IREG_temp2);
+    uop_AND_IMM(ir, IREG_flags, IREG_flags, ~(C_FLAG | V_FLAG));
+    uop_OR(ir, IREG_flags, IREG_flags, IREG_temp3_W);
+}
+
+uint32_t
+ropIMUL_w_rm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
+    imul_generate(ir, IREG_16(dest_reg), IREG_16(dest_reg), src_reg);
+
+    return op_pc + 1;
+}
+uint32_t
+ropIMUL_l_rm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
+    imul_generate(ir, IREG_32(dest_reg), IREG_32(dest_reg), src_reg);
+
+    return op_pc + 1;
+}
+
+uint32_t
+ropIMUL_w_rm_imm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
+    if (block->flags & CODEBLOCK_NO_IMMEDIATES)
+        LOAD_IMMEDIATE_FROM_RAM_16(block, ir, IREG_temp1_W, cs + op_pc + 1);
+    else {
+        uop_MOV_IMM(ir, IREG_temp1_W, fastreadw(cs + op_pc + 1));
+        codegen_mark_code_present(block, cs + op_pc + 1, 2);
+    }
+    imul_generate(ir, IREG_16(dest_reg), src_reg, IREG_temp1_W);
+
+    return op_pc + 3;
+}
+uint32_t
+ropIMUL_l_rm_imm(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
+    if (block->flags & CODEBLOCK_NO_IMMEDIATES)
+        LOAD_IMMEDIATE_FROM_RAM_32(block, ir, IREG_temp1, cs + op_pc + 1);
+    else {
+        uop_MOV_IMM(ir, IREG_temp1, fastreadl(cs + op_pc + 1));
+        codegen_mark_code_present(block, cs + op_pc + 1, 4);
+    }
+    imul_generate(ir, IREG_32(dest_reg), src_reg, IREG_temp1);
+
+    return op_pc + 5;
+}
+
+uint32_t
+ropIMUL_w_rm_imm8(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 0);
+    if (block->flags & CODEBLOCK_NO_IMMEDIATES) {
+        LOAD_IMMEDIATE_FROM_RAM_8(block, ir, IREG_temp1_B, cs + op_pc + 1);
+        uop_MOVSX(ir, IREG_temp1_W, IREG_temp1_B);
+    } else {
+        uop_MOV_IMM(ir, IREG_temp1_W, (uint16_t) (int16_t) (int8_t) fastreadb(cs + op_pc + 1));
+        codegen_mark_code_present(block, cs + op_pc + 1, 1);
+    }
+    imul_generate(ir, IREG_16(dest_reg), src_reg, IREG_temp1_W);
+
+    return op_pc + 2;
+}
+uint32_t
+ropIMUL_l_rm_imm8(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    int dest_reg = (fetchdat >> 3) & 7;
+    int src_reg;
+
+    if (!imul_supported())
+        return 0;
+
+    codegen_mark_code_present(block, cs + op_pc, 1);
+    imul_rebuild_flags(ir);
+    src_reg = imul_load_rm(block, ir, fetchdat, op_32, &op_pc, 1);
+    if (block->flags & CODEBLOCK_NO_IMMEDIATES) {
+        LOAD_IMMEDIATE_FROM_RAM_8(block, ir, IREG_temp1_B, cs + op_pc + 1);
+        uop_MOVSX(ir, IREG_temp1, IREG_temp1_B);
+    } else {
+        uop_MOV_IMM(ir, IREG_temp1, (uint32_t) (int32_t) (int8_t) fastreadb(cs + op_pc + 1));
+        codegen_mark_code_present(block, cs + op_pc + 1, 1);
+    }
+    imul_generate(ir, IREG_32(dest_reg), src_reg, IREG_temp1);
+
+    return op_pc + 2;
+}
