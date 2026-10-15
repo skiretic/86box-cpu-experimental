@@ -21,6 +21,13 @@
 /* Let generic uop emitters use backend-specific immediate store helpers. */
 #define CODEGEN_BACKEND_HAS_MOV_IMM
 
+/* Blocks jump straight to their successor when nothing between them needs
+   the C loop (codegen_link.h). The options below add work to every loop
+   iteration that the link routine does not repeat. */
+#if !defined(USE_GDBSTUB) && !defined(USE_ACYCS) && !defined(USE_DEBUG_REGS_486)
+#    define CODEGEN_BACKEND_HAS_BLOCK_LINK
+#endif
+
 void host_arm64_BLR(codeblock_t *block, int addr_reg);
 void host_arm64_CBNZ(codeblock_t *block, int reg, uintptr_t dest);
 void host_arm64_MOVK_IMM(codeblock_t *block, int reg, uint32_t imm_data);

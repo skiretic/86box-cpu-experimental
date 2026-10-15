@@ -14,6 +14,7 @@
 #    include "codegen_backend_arm64_defs.h"
 #    include "codegen_backend_arm64_ops.h"
 #    include "codegen_ir_defs.h"
+#    include "codegen_link.h"
 #    include "codegen_ops_rep.h"
 #    include "codegen_reg.h"
 #    include "x86.h"
@@ -52,6 +53,10 @@ void *codegen_gpf_rout;
 void *codegen_exit_rout;
 void *codegen_int7_rout;
 void *codegen_rep_rout[2][3][2];
+
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS];
+#    endif
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
     { REG_X19, 0},

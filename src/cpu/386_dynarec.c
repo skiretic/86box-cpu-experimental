@@ -283,8 +283,14 @@ dr_blocks_cache(void)
 
 #ifdef USE_DYNAREC
 int32_t         cycles_main = 0;
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+/* The block link routine does the loop-top stores itself. */
+int32_t  cycles_old = 0;
+uint64_t tsc_old    = 0;
+#    else
 static int32_t  cycles_old  = 0;
 static uint64_t tsc_old     = 0;
+#    endif
 
 #    ifdef USE_ACYCS
 int32_t acycs = 0;
