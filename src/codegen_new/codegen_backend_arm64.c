@@ -1015,12 +1015,16 @@ build_link_routine(codeblock_t *block)
     host_arm64_short_branch_set_offset(irq_ok, &block_write_data[block_pos]);
 
     /*Status and FPU rounding as when the slot was filled, compared as one
-      word against W6*/
+      word against W6. Only the C loop refreshes the PC24 and RC_NZ status
+      bits from npxc, so they can be stale after an FLDCW in a linked block;
+      the npxc compare decides them instead. Everything else that reads
+      those two bits runs after that refresh.*/
     host_arm64_LDRH_IMM(block, REG_W4, REG_X4, 0);
     host_arm64_LDRH_IMM(block, REG_W5, REG_CPUSTATE, rep_state_offset(&cpu_state.npxc));
     host_arm64_AND_IMM(block, REG_W5, REG_W5, 0x0f00);
     host_arm64_ORR_REG(block, REG_W4, REG_W4, REG_W5, 16);
-    host_arm64_CMP_REG(block, REG_W4, REG_W6);
+    host_arm64_EOR_REG(block, REG_W4, REG_W4, REG_W6, 0);
+    host_arm64_TST_IMM(block, REG_W4, ~(uint32_t) (CPU_STATUS_FPU_PC24 | CPU_STATUS_FPU_RC_NZ));
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
 
     /*The TSC. If it moved, update_tsc() ran inside the block and the C loop
