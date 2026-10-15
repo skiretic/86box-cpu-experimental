@@ -36,6 +36,9 @@
 #    include "codegen.h"
 #    ifdef USE_NEW_DYNAREC
 #        include "codegen_backend.h"
+#        ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+#            include "codegen_link.h"
+#        endif
 #    endif
 #endif
 
@@ -283,8 +286,20 @@ dr_blocks_cache(void)
 
 #ifdef USE_DYNAREC
 int32_t         cycles_main = 0;
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+/* The block link routine does the loop-top stores itself. */
+int32_t  cycles_old = 0;
+uint64_t tsc_old    = 0;
+#    else
 static int32_t  cycles_old  = 0;
 static uint64_t tsc_old     = 0;
+#    endif
+
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+/* Slot pair returned by the last compiled block, while the loop has run
+   nothing else since; NULL otherwise. */
+static codegen_link_slot_t *link_from = NULL;
+#    endif
 
 #    ifdef USE_ACYCS
 int32_t acycs = 0;
@@ -495,6 +510,12 @@ exec386_dynarec_dyn(void)
     codeblock_t *block = codeblock_hash[hash];
 #    endif
     int valid_block = 0;
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+    /* Only a path that ends in compiled code sets it again. */
+    codegen_link_slot_t *from = link_from;
+
+    link_from = NULL;
+#    endif
 
     /* Code in device memory (a BIOS copying a routine into video memory) is
        fetched through the device's read handlers, and nothing tracks writes
@@ -558,6 +579,10 @@ exec386_dynarec_dyn(void)
         if (valid_block && (block->page_mask & *block->dirty_mask)) {
 #    ifdef USE_NEW_DYNAREC
             codegen_check_flush(page, page->dirty_mask, phys_addr);
+#        ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+            /* Covers the flag write just below. */
+            codegen_link_block_changed(block);
+#        endif
             if (block->valid && (block->flags & CODEBLOCK_IN_DIRTY_LIST))
                 block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
             else
@@ -588,6 +613,10 @@ exec386_dynarec_dyn(void)
             else if (block->page_mask2 & *block->dirty_mask2) {
 #    ifdef USE_NEW_DYNAREC
                 codegen_check_flush(page_2, page_2->dirty_mask, phys_addr_2);
+#        ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+                /* Covers the flag write just below. */
+                codegen_link_block_changed(block);
+#        endif
                 if (block->valid && (block->flags & CODEBLOCK_IN_DIRTY_LIST))
                     block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
                 else
@@ -653,6 +682,9 @@ exec386_dynarec_dyn(void)
 #endif
                 block->flags |= CODEBLOCK_BYTE_MASK;
             }
+#        ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+            codegen_link_block_changed(block);
+#        endif
         }
         if (valid_block && (block->flags & CODEBLOCK_WAS_RECOMPILED) && (block->flags & CODEBLOCK_STATIC_TOP) && block->TOP != (cpu_state.TOP & 7))
 #    else
@@ -663,6 +695,9 @@ exec386_dynarec_dyn(void)
                with, re-compile using dynamic top-of-stack*/
 #    ifdef USE_NEW_DYNAREC
             block->flags &= ~(CODEBLOCK_STATIC_TOP | CODEBLOCK_WAS_RECOMPILED);
+#        ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+            codegen_link_block_changed(block);
+#        endif
 #    else
             block->flags &= ~CODEBLOCK_STATIC_TOP;
             block->was_recompiled = 0;
@@ -676,18 +711,33 @@ exec386_dynarec_dyn(void)
     if (valid_block && block->was_recompiled)
 #    endif
     {
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+        codegen_link_slot_t *(*code)(void) = (void *) &block->data[BLOCK_START];
+
+        if (from != NULL)
+            codegen_link_patch(from, block, phys_addr);
+#    else
         void (*code)(void) = (void *) &block->data[BLOCK_START];
+#    endif
 
 #    ifndef USE_NEW_DYNAREC
         codeblock_hash[hash] = block;
 #    endif
         inrecomp = 1;
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+        link_from = code();
+#    else
         code();
+#    endif
 #    ifdef USE_ACYCS
         acycs = 0;
 #    endif
         inrecomp = 0;
 
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+        if (x86_was_reset)
+            link_from = NULL;
+#    endif
         if (x86_was_reset)
             codegen_reset();
     } else if (valid_block && !cpu_state.abrt) {
@@ -949,9 +999,18 @@ exec386_dynarec(int32_t cycs)
             tsc_old          = tsc;
             if (cpu_cache_enabled || cpu_force_interpreter || cpu_override_dynarec || cpu_flush_pending || (!CACHE_ON())) /*Interpret block*/
             {
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+                link_from = NULL;
+#    endif
                 exec386_dynarec_int();
             } else {
                 exec386_dynarec_dyn();
+#    if defined(USE_NEW_DYNAREC) && defined(CODEGEN_BACKEND_HAS_BLOCK_LINK)
+                /* Linked blocks moved the loop-top state on; time is counted
+                   from the last link. */
+                oldcyc = cycles_old;
+                oldtsc = tsc_old;
+#    endif
                 /* A CR0 paging toggle ends the block it is in, so it was the
                    last instruction executed. */
                 if (cpu_flush_pending == 1)

@@ -14,6 +14,7 @@
 #    include "codegen_backend_arm64_defs.h"
 #    include "codegen_backend_arm64_ops.h"
 #    include "codegen_ir_defs.h"
+#    include "codegen_link.h"
 #    include "codegen_ops_rep.h"
 #    include "codegen_reg.h"
 #    include "x86.h"
@@ -21,6 +22,12 @@
 #    include "x86seg.h"
 #    include "x87_sf.h"
 #    include "x87.h"
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+#        include <stddef.h>
+#        include <86box/nmi.h>
+#        include <86box/pic.h>
+#        include <86box/timer.h>
+#    endif
 
 #    if defined(__linux__) || defined(__APPLE__)
 #        include <sys/mman.h>
@@ -52,6 +59,13 @@ void *codegen_gpf_rout;
 void *codegen_exit_rout;
 void *codegen_int7_rout;
 void *codegen_rep_rout[2][3][2];
+
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS];
+#    endif
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+static void *codegen_link_rout;
+#    endif
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
     { REG_X19, 0},
@@ -808,6 +822,301 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
         fatal("build_rep_routine - too many slow path branches\n");
 }
 
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+enum {
+    LINK_LIT_WAS_RESET,
+    LINK_LIT_FLUSH_PENDING,
+    LINK_LIT_CPU_INIT,
+    LINK_LIT_NEW_NE,
+    LINK_LIT_CACHE_ENABLED,
+    LINK_LIT_FORCE_INTERPRETER,
+    LINK_LIT_OVERRIDE_DYNAREC,
+    LINK_LIT_NMI,
+    LINK_LIT_NMI_ENABLE,
+    LINK_LIT_NMI_MASK,
+    LINK_LIT_PIC,
+    LINK_LIT_TSC,
+    LINK_LIT_TSC_OLD,
+    LINK_LIT_CYCLES_OLD,
+    LINK_LIT_TIMER_TARGET,
+    LINK_LIT_GET_PHYS_VIRT,
+    LINK_LIT_GET_PHYS_PHYS,
+    LINK_LIT_RAMMASK,
+    LINK_LIT_CUR_STATUS,
+    LINK_LIT_OLDCS,
+    LINK_LIT_OLDCPL,
+    LINK_LIT_FETCH_DEVICE,
+
+    LINK_LIT_COUNT
+};
+
+#        define LINK_SLOT(field) ((int) offsetof(codegen_link_slot_t, field))
+#        define LINK_MAX_MISS    32
+
+_Static_assert(offsetof(codegen_link_slot_t, exit_cs) == offsetof(codegen_link_slot_t, exit_pc) + 4,
+               "the link routine loads exit_pc and exit_cs as one 64-bit key");
+_Static_assert(T_FLAG == (1 << 8) && I_FLAG == (1 << 9), "flag bits tested by number");
+
+static void
+link_load_lit(codeblock_t *block, int reg, uint64_t *lit, int nr)
+{
+    host_arm64_LDR_LITERAL_X(block, reg, (int) ((uintptr_t) &lit[nr] - (uintptr_t) &block_write_data[block_pos]));
+}
+
+/*Entered by a branch from the end of a block, with X0 = the block's slot
+  pair and X29 = &cpu_state. Repeats what exec386_dynarec() and
+  exec386_dynarec_dyn() do between that block and the next one, assuming
+  nothing in that stretch has anything to do: if any check fails it returns
+  to C exactly as the block's own epilogue did, before any store. On a hit
+  it does the stores the C loop would have done and jumps to the next
+  block's link entry, which runs on the frame this block's prologue built.
+
+  Global addresses come from a literal pool placed just before the routine,
+  so the routine and the pool must share one allocator block.*/
+static void
+build_link_routine(codeblock_t *block)
+{
+    uint64_t *lit;
+    uint8_t  *start_data;
+    uint32_t *miss[LINK_MAX_MISS];
+    int       nr_miss = 0;
+    uint32_t *slot1;
+    uint32_t *found;
+    uint32_t *nmi_ok[2];
+    uint32_t *irq_ok;
+    uint32_t *uncached;
+    uint32_t *no_paging;
+    uint8_t  *xlat_done;
+    uint8_t  *miss_dest;
+
+    /*Start a fresh allocator block, so nothing below is split across two*/
+    codegen_alloc(block, BLOCK_MAX - 4);
+    if (block_pos & 7)
+        block_pos += 4;
+    start_data = block_write_data;
+    lit        = (uint64_t *) &block_write_data[block_pos];
+    block_pos += LINK_LIT_COUNT * 8;
+
+    lit[LINK_LIT_WAS_RESET]         = (uint64_t) (uintptr_t) &x86_was_reset;
+    lit[LINK_LIT_FLUSH_PENDING]     = (uint64_t) (uintptr_t) &cpu_flush_pending;
+    lit[LINK_LIT_CPU_INIT]          = (uint64_t) (uintptr_t) &cpu_init;
+    lit[LINK_LIT_NEW_NE]            = (uint64_t) (uintptr_t) &new_ne;
+    lit[LINK_LIT_CACHE_ENABLED]     = (uint64_t) (uintptr_t) &cpu_cache_enabled;
+    lit[LINK_LIT_FORCE_INTERPRETER] = (uint64_t) (uintptr_t) &cpu_force_interpreter;
+    lit[LINK_LIT_OVERRIDE_DYNAREC]  = (uint64_t) (uintptr_t) &cpu_override_dynarec;
+    lit[LINK_LIT_NMI]               = (uint64_t) (uintptr_t) &nmi;
+    lit[LINK_LIT_NMI_ENABLE]        = (uint64_t) (uintptr_t) &nmi_enable;
+    lit[LINK_LIT_NMI_MASK]          = (uint64_t) (uintptr_t) &nmi_mask;
+    lit[LINK_LIT_PIC]               = (uint64_t) (uintptr_t) &pic;
+    lit[LINK_LIT_TSC]               = (uint64_t) (uintptr_t) &tsc;
+    lit[LINK_LIT_TSC_OLD]           = (uint64_t) (uintptr_t) &tsc_old;
+    lit[LINK_LIT_CYCLES_OLD]        = (uint64_t) (uintptr_t) &cycles_old;
+    lit[LINK_LIT_TIMER_TARGET]      = (uint64_t) (uintptr_t) &timer_target;
+    lit[LINK_LIT_GET_PHYS_VIRT]     = (uint64_t) (uintptr_t) &get_phys_virt;
+    lit[LINK_LIT_GET_PHYS_PHYS]     = (uint64_t) (uintptr_t) &get_phys_phys;
+    lit[LINK_LIT_RAMMASK]           = (uint64_t) (uintptr_t) &rammask;
+    lit[LINK_LIT_CUR_STATUS]        = (uint64_t) (uintptr_t) &cpu_cur_status;
+    lit[LINK_LIT_OLDCS]             = (uint64_t) (uintptr_t) &oldcs;
+    lit[LINK_LIT_OLDCPL]            = (uint64_t) (uintptr_t) &oldcpl;
+    lit[LINK_LIT_FETCH_DEVICE]      = (uint64_t) (uintptr_t) &cpu_fetch_device;
+
+    codegen_link_rout = &block_write_data[block_pos];
+
+    /*X1 = the slot whose exit_pc and exit_cs match cpu_state.pc and the CS
+      base and whose entry is set; X15 = its entry*/
+    host_arm64_LDR_IMM_W(block, REG_W2, REG_CPUSTATE, rep_state_offset(&cpu_state.pc));
+    host_arm64_LDR_IMM_W(block, REG_W3, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.base));
+    host_arm64_ORRX_REG(block, REG_X4, REG_X2, REG_X3, 32);
+    host_arm64_LDR_IMM_X(block, REG_X5, REG_X0, LINK_SLOT(exit_pc));
+    host_arm64_MOVX_REG(block, REG_X1, REG_X0, 0);
+    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
+    slot1 = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_X(block, REG_X15, REG_X1, LINK_SLOT(entry));
+    found = host_arm64_CBNZ_SHORT_(block, REG_X15);
+    host_arm64_short_branch_set_offset(slot1, &block_write_data[block_pos]);
+    host_arm64_ADDX_IMM(block, REG_X1, REG_X0, sizeof(codegen_link_slot_t));
+    host_arm64_LDR_IMM_X(block, REG_X5, REG_X1, LINK_SLOT(exit_pc));
+    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_X(block, REG_X15, REG_X1, LINK_SLOT(entry));
+    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X15);
+    host_arm64_short_branch_set_offset(found, &block_write_data[block_pos]);
+
+    /*Target not freed or changed since the slot was filled*/
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X1, LINK_SLOT(block));
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, offsetof(codeblock_t, link_gen));
+    host_arm64_LDR_IMM_W(block, REG_W5, REG_X1, LINK_SLOT(gen));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+
+    /*Nothing pending for the loop, and the loop would pick the recompiler*/
+    host_arm64_LDRB_IMM_W(block, REG_W5, REG_CPUSTATE, rep_state_offset(&cpu_state.abrt));
+    host_arm64_LDRB_IMM_W(block, REG_W4, REG_CPUSTATE, rep_state_offset(&smi_line));
+    host_arm64_ORR_REG(block, REG_W5, REG_W5, REG_W4, 0);
+    for (int c = LINK_LIT_WAS_RESET; c <= LINK_LIT_OVERRIDE_DYNAREC; c++) {
+        link_load_lit(block, REG_X4, lit, c);
+        host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, 0);
+        host_arm64_ORR_REG(block, REG_W5, REG_W5, REG_W4, 0);
+    }
+    miss[nr_miss++] = host_arm64_CBNZ_SHORT_(block, REG_X5);
+
+    /*nmi && nmi_enable && nmi_mask*/
+    link_load_lit(block, REG_X4, lit, LINK_LIT_NMI);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, 0);
+    nmi_ok[0] = host_arm64_CBZ_SHORT_(block, REG_X4);
+    link_load_lit(block, REG_X4, lit, LINK_LIT_NMI_ENABLE);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, 0);
+    nmi_ok[1] = host_arm64_CBZ_SHORT_(block, REG_X4);
+    link_load_lit(block, REG_X4, lit, LINK_LIT_NMI_MASK);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, 0);
+    miss[nr_miss++] = host_arm64_CBNZ_SHORT_(block, REG_X4);
+    host_arm64_short_branch_set_offset(nmi_ok[0], &block_write_data[block_pos]);
+    host_arm64_short_branch_set_offset(nmi_ok[1], &block_write_data[block_pos]);
+
+    /*Trap flag, and an interrupt the loop would take*/
+    host_arm64_LDRH_IMM(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.flags));
+    miss[nr_miss++] = host_arm64_TBNZ_SHORT_(block, REG_W4, 8);
+    irq_ok = host_arm64_TBZ_SHORT_(block, REG_W4, 9);
+    link_load_lit(block, REG_X4, lit, LINK_LIT_PIC);
+    host_arm64_LDRB_IMM_W(block, REG_W4, REG_X4, offsetof(pic_t, int_pending));
+    miss[nr_miss++] = host_arm64_CBNZ_SHORT_(block, REG_X4);
+    host_arm64_short_branch_set_offset(irq_ok, &block_write_data[block_pos]);
+
+    /*The TSC. If it moved, update_tsc() ran inside the block and the C loop
+      does the rest of that arithmetic. X10 = &tsc, X11 = new tsc,
+      X12 = &tsc_old, X13 = &cycles_old, W14 = cycles*/
+    link_load_lit(block, REG_X10, lit, LINK_LIT_TSC);
+    host_arm64_LDR_IMM_X(block, REG_X11, REG_X10, 0);
+    link_load_lit(block, REG_X12, lit, LINK_LIT_TSC_OLD);
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X12, 0);
+    host_arm64_CMPX_REG(block, REG_X11, REG_X4);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    link_load_lit(block, REG_X13, lit, LINK_LIT_CYCLES_OLD);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X13, 0);
+    host_arm64_LDR_IMM_W(block, REG_W14, REG_CPUSTATE, rep_state_offset(&cpu_state._cycles));
+    host_arm64_SUB_REG(block, REG_W4, REG_W4, REG_W14, 0);
+    host_arm64_CMP_IMM(block, REG_W4, 0);
+    miss[nr_miss++] = host_arm64_BLE_SHORT_(block);
+    host_arm64_ADDX_REG_UXTW(block, REG_X11, REG_X11, REG_W4);
+    /*No timer due at the new TSC*/
+    link_load_lit(block, REG_X4, lit, LINK_LIT_TIMER_TARGET);
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X4, 0);
+    host_arm64_SUBX_REG(block, REG_X4, REG_X4, REG_X11);
+    host_arm64_CMPX_IMM(block, REG_X4, 0);
+    miss[nr_miss++] = host_arm64_BLE_SHORT_(block);
+    /*Slice not used up*/
+    host_arm64_CMP_IMM(block, REG_W14, 0);
+    miss[nr_miss++] = host_arm64_BLE_SHORT_(block);
+
+    /*Paging and cache-disable bits as when the slot was filled; W17 = them*/
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.CR0.l));
+    host_arm64_AND_IMM(block, REG_W4, REG_W4, 0xc0000000);
+    host_arm64_LDR_IMM_W(block, REG_W17, REG_X1, LINK_SLOT(cr0_bits));
+    host_arm64_CMP_REG(block, REG_W4, REG_W17);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+
+    /*get_phys(cs + pc) gives phys_page. X6 = &get_phys_virt, W7 = the
+      value get_phys() leaves there, X8 = &get_phys_phys, W9 = phys_page*/
+    host_arm64_ADD_REG(block, REG_W2, REG_W2, REG_W3, 0);
+    host_arm64_LDR_IMM_W(block, REG_W9, REG_X1, LINK_SLOT(phys_page));
+    link_load_lit(block, REG_X6, lit, LINK_LIT_GET_PHYS_VIRT);
+    host_arm64_LDR_IMM_W(block, REG_W7, REG_X6, 0);
+    link_load_lit(block, REG_X8, lit, LINK_LIT_GET_PHYS_PHYS);
+    host_arm64_EOR_REG(block, REG_W4, REG_W7, REG_W2, 0);
+    host_arm64_TST_IMM(block, REG_W4, 0xfffff000);
+    uncached = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X8, 0);
+    host_arm64_CMP_REG(block, REG_W4, REG_W9);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    xlat_done = &block_write_data[block_pos];
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X1, LINK_SLOT(mem_exec));
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X4, 0);
+    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X4);
+
+    /*The block lookup and the checks made before running it*/
+    link_load_lit(block, REG_X4, lit, LINK_LIT_CUR_STATUS);
+    host_arm64_LDRH_IMM(block, REG_W4, REG_X4, 0);
+    host_arm64_LDRH_IMM(block, REG_W5, REG_X1, LINK_SLOT(status));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDRH_IMM(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.npxc));
+    host_arm64_AND_IMM(block, REG_W4, REG_W4, 0x0f00);
+    host_arm64_LDRH_IMM(block, REG_W5, REG_X1, LINK_SLOT(npxc));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X1, LINK_SLOT(hash));
+    host_arm64_LDRH_IMM(block, REG_W4, REG_X4, 0);
+    host_arm64_LDRH_IMM(block, REG_W5, REG_X1, LINK_SLOT(block_nr));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X1, LINK_SLOT(dirty_mask));
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X4, 0);
+    host_arm64_LDR_IMM_X(block, REG_X5, REG_X1, LINK_SLOT(page_mask));
+    host_arm64_TSTX_REG(block, REG_X4, REG_X5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.TOP));
+    host_arm64_LDRB_IMM_W(block, REG_W5, REG_X1, LINK_SLOT(top_mask));
+    host_arm64_AND_REG(block, REG_W4, REG_W4, REG_W5, 0);
+    host_arm64_LDRB_IMM_W(block, REG_W5, REG_X1, LINK_SLOT(top));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+
+    /*Every check passed: the C loop's stores, then the next block*/
+    host_arm64_STR_IMM_Q(block, REG_X11, REG_X10, 0);
+    host_arm64_STR_IMM_Q(block, REG_X11, REG_X12, 0);
+    host_arm64_STR_IMM_W(block, REG_W14, REG_X13, 0);
+    host_arm64_LDRH_IMM(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.seg));
+    link_load_lit(block, REG_X5, lit, LINK_LIT_OLDCS);
+    host_arm64_STRH_IMM(block, REG_W4, REG_X5, 0);
+    host_arm64_LDRB_IMM_W(block, REG_W4, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.access));
+    host_arm64_UBFX(block, REG_W4, REG_W4, 5, 2);
+    link_load_lit(block, REG_X5, lit, LINK_LIT_OLDCPL);
+    host_arm64_STR_IMM_W(block, REG_W4, REG_X5, 0);
+    host_arm64_STR_IMM_W(block, REG_W7, REG_X6, 0);
+    host_arm64_STR_IMM_W(block, REG_W9, REG_X8, 0);
+    link_load_lit(block, REG_X5, lit, LINK_LIT_FETCH_DEVICE);
+    host_arm64_STR_IMM_W(block, REG_WZR, REG_X5, 0);
+    host_arm64_BR(block, REG_X15);
+
+    /*Miss: the block's own epilogue, X0 still the slot pair*/
+    miss_dest = &block_write_data[block_pos];
+    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
+    host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_X(block, REG_X25, REG_X26, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_X(block, REG_X27, REG_X28, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
+    host_arm64_RET(block, REG_X30);
+
+    /*get_phys() cache miss: it would store the full address in
+      get_phys_virt, and translate through readlookup2[] with paging on or
+      through rammask with paging off*/
+    host_arm64_short_branch_set_offset(uncached, &block_write_data[block_pos]);
+    host_arm64_MOV_REG(block, REG_W7, REG_W2, 0);
+    no_paging = host_arm64_TBZ_SHORT_(block, REG_W17, 31);
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X1, LINK_SLOT(xlat));
+    host_arm64_LDR_IMM_X(block, REG_X4, REG_X4, 0);
+    host_arm64_LDR_IMM_X(block, REG_X5, REG_X1, LINK_SLOT(xlat_val));
+    host_arm64_CMPX_REG(block, REG_X4, REG_X5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_B(block, xlat_done);
+    host_arm64_short_branch_set_offset(no_paging, &block_write_data[block_pos]);
+    link_load_lit(block, REG_X4, lit, LINK_LIT_RAMMASK);
+    host_arm64_LDR_IMM_W(block, REG_W4, REG_X4, 0);
+    host_arm64_LDR_IMM_W(block, REG_W5, REG_X1, LINK_SLOT(rammask));
+    host_arm64_CMP_REG(block, REG_W4, REG_W5);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_B(block, xlat_done);
+
+    if (nr_miss > LINK_MAX_MISS)
+        fatal("build_link_routine - too many miss branches\n");
+    if (block_write_data != start_data)
+        fatal("build_link_routine - routine does not fit in one allocator block\n");
+    for (int c = 0; c < nr_miss; c++)
+        host_arm64_short_branch_set_offset(miss[c], miss_dest);
+}
+#    endif
+
 void
 codegen_backend_init(void)
 {
@@ -847,6 +1156,10 @@ codegen_backend_init(void)
     host_arm64_call(block, (void *) x86gpf);
 
     codegen_exit_rout = &block_write_data[block_pos];
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    /*No slot pair: a block leaving from here is never linked*/
+    host_arm64_MOVZ_IMM(block, REG_W0, 0);
+#    endif
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
@@ -869,6 +1182,10 @@ codegen_backend_init(void)
             }
         }
     }
+
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    build_link_routine(block);
+#    endif
 
     block_write_data = NULL;
 
@@ -913,6 +1230,12 @@ codegen_backend_prologue(codeblock_t *block)
 void
 codegen_backend_epilogue(codeblock_t *block)
 {
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    /*The link routine returns through the same register restores on a miss*/
+    codegen_alloc(block, 20);
+    host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) codegen_link_slots[get_block_nr(block)]);
+    host_arm64_B(block, codegen_link_rout);
+#    else
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
@@ -920,6 +1243,7 @@ codegen_backend_epilogue(codeblock_t *block)
     host_arm64_LDP_POSTIDX_X(block, REG_X27, REG_X28, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
     host_arm64_RET(block, REG_X30);
+#    endif
 
     codegen_allocator_clean_blocks(block->head_mem_block);
 }
