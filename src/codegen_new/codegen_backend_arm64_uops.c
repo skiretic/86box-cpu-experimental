@@ -3170,6 +3170,9 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CALL_FUNC_RESULT &
         UOP_MASK]
     = codegen_CALL_FUNC_RESULT,
+    [UOP_CALL_FUNC_RESULT_ORDERED &
+        UOP_MASK]
+    = codegen_CALL_FUNC_RESULT,
     [UOP_CALL_INSTRUCTION_FUNC &
         UOP_MASK]
     = codegen_CALL_INSTRUCTION_FUNC,

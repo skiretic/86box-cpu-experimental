@@ -55,6 +55,9 @@
 #define UOP_JMP_DEST       (UOP_TYPE_PARAMS_IMM | UOP_TYPE_PARAMS_POINTER | 0x17 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
 #define UOP_NOP_BARRIER    (UOP_TYPE_BARRIER | 0x18)
 #define UOP_STORE_P_IMM_16 (UOP_TYPE_PARAMS_IMM | 0x19)
+/*UOP_CALL_FUNC_RESULT_ORDERED - dest_reg = C function at p, with registers written back but left
+  loaded. The function must only read guest state*/
+#define UOP_CALL_FUNC_RESULT_ORDERED (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0x1a | UOP_TYPE_ORDER_BARRIER)
 
 #ifdef DEBUG_EXTRA
 /*UOP_LOG_INSTR - log non-recompiled instruction in imm_data*/
@@ -737,6 +740,12 @@ extern int codegen_fp_enter(void);
 #define uop_CALL_FUNC(ir, p)                                     uop_gen_pointer(UOP_CALL_FUNC, ir, p)
 #define uop_CALL_FUNC_RESULT(ir, dst_reg, p)                     uop_gen_reg_dst_pointer(UOP_CALL_FUNC_RESULT, ir, dst_reg, p)
 #define uop_CALL_FUNC_ORDERED(ir, p)                             uop_gen_pointer(UOP_CALL_FUNC_ORDERED, ir, p)
+#if defined __aarch64__ || defined _M_ARM64
+#define uop_CALL_FUNC_RESULT_ORDERED(ir, dst_reg, p)             uop_gen_reg_dst_pointer(UOP_CALL_FUNC_RESULT_ORDERED, ir, dst_reg, p)
+#else
+/*Only arm64 keeps the cached registers in callee-saved host registers*/
+#define uop_CALL_FUNC_RESULT_ORDERED(ir, dst_reg, p)             uop_CALL_FUNC_RESULT(ir, dst_reg, p)
+#endif
 #define uop_CALL_INSTRUCTION_FUNC(ir, p, imm)                    uop_gen_pointer_imm(UOP_CALL_INSTRUCTION_FUNC, ir, p, imm)
 #define uop_CALL_REP_STRING(ir, p, imm)                          uop_gen_pointer_imm(UOP_CALL_REP_STRING, ir, p, imm)
 
