@@ -3429,6 +3429,9 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_FP_ENTER &
         UOP_MASK]
     = codegen_FP_ENTER,
+    [UOP_FP_ENTER_ORDERED &
+        UOP_MASK]
+    = codegen_FP_ENTER,
     [UOP_MMX_ENTER &
         UOP_MASK]
     = codegen_MMX_ENTER,

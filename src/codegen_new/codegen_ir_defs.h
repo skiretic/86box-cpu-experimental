@@ -205,6 +205,10 @@
 
 /*UOP_FP_ENTER - must be called before any FPU register accessed*/
 #define UOP_FP_ENTER (UOP_TYPE_PARAMS_IMM | 0x80 | UOP_TYPE_BARRIER)
+/*UOP_FP_ENTER_ORDERED - UOP_FP_ENTER with registers written back but left loaded. The #NM path
+  raises the exception and leaves the block, so nothing the IR caches changes on the path that
+  continues*/
+#define UOP_FP_ENTER_ORDERED (UOP_TYPE_PARAMS_IMM | 0x8b | UOP_TYPE_ORDER_BARRIER)
 /*UOP_FADD - (floating point) dest_reg = src_reg_a + src_reg_b*/
 #define UOP_FADD (UOP_TYPE_PARAMS_REGS | 0x81)
 /*UOP_FSUB - (floating point) dest_reg = src_reg_a - src_reg_b*/
@@ -770,6 +774,17 @@ extern int codegen_fp_enter(void);
 #define uop_FTST(ir, dst_reg, src_reg)                           uop_gen_reg_dst_src1(UOP_FTST, ir, dst_reg, src_reg)
 
 #if defined __ARM_EABI__ || defined _ARM_ || defined _M_ARM || defined __aarch64__ || defined _M_ARM64 || defined __loongarch_lp64
+#if defined __aarch64__ || defined _M_ARM64
+#define uop_FP_ENTER(ir)                                    \
+    do {                                                    \
+        if (!codegen_fpu_entered) {                         \
+            uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);   \
+            uop_gen_imm(UOP_FP_ENTER_ORDERED, ir, cpu_state.oldpc); \
+        }                                                   \
+        codegen_fpu_entered = 1;                            \
+        codegen_mmx_entered = 0;                            \
+    } while (0)
+#else
 #define uop_FP_ENTER(ir)                                    \
     do {                                                    \
         if (!codegen_fpu_entered) {                         \
@@ -780,6 +795,7 @@ extern int codegen_fp_enter(void);
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
     } while (0)
+#endif
 #define uop_MMX_ENTER(ir)                                    \
     do {                                                     \
         if (!codegen_mmx_entered) {                         \
