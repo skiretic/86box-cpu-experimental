@@ -860,6 +860,8 @@ enum {
     LINK_LIT_NMI_ENABLE,
     LINK_LIT_NMI_MASK,
     LINK_LIT_RAMMASK,
+    LINK_LIT_READLOOKUP2,
+    LINK_LIT_RAM,
 
     LINK_LIT_COUNT
 };
@@ -884,8 +886,9 @@ _Static_assert(offsetof(codegen_link_slot_t, xlat_val) == offsetof(codegen_link_
                "pointer fields loaded as pairs");
 _Static_assert(offsetof(codegen_link_slot_t, top_mask) == offsetof(codegen_link_slot_t, block_nr) + 2
                    && offsetof(codegen_link_slot_t, top) == offsetof(codegen_link_slot_t, block_nr) + 3
-                   && !(offsetof(codegen_link_slot_t, block_nr) & 3),
-               "block_nr, top_mask and top are loaded as one word");
+                   && offsetof(codegen_link_slot_t, two_page) == offsetof(codegen_link_slot_t, block_nr) + 4
+                   && !(offsetof(codegen_link_slot_t, block_nr) & 7),
+               "block_nr, top_mask, top and two_page are loaded as one 64-bit word");
 _Static_assert(offsetof(cpu_state_t, _smi_line) == offsetof(cpu_state_t, abrt) + 1
                    && offsetof(cpu_state_t, _cycles) == offsetof(cpu_state_t, abrt) + 2
                    && !((offsetof(cpu_state_t, abrt) - 2) & 3),
@@ -894,7 +897,7 @@ _Static_assert(offsetof(cpu_state_t, flags) == offsetof(cpu_state_t, CR0) + 4 &&
                "CR0 and flags are loaded as one 64-bit word");
 _Static_assert(offsetof(x86seg, seg) == offsetof(x86seg, access) + 2 && !(offsetof(cpu_state_t, seg_cs.access) & 3),
                "CS access and selector are loaded as one word");
-_Static_assert(T_FLAG == (1 << 8) && I_FLAG == (1 << 9), "flag bits tested by number");
+_Static_assert(T_FLAG == (1 << 8) && I_FLAG == (1 << 9) && CODEBLOCK_BYTE_MASK == (1 << 5), "flag bits tested by number");
 
 /*Entered by a branch from the end of a block, with X0 = the block's slot
   pair and X29 = &cpu_state. Repeats what exec386_dynarec() and
@@ -925,8 +928,14 @@ build_link_routine(codeblock_t *block)
     uint32_t *uncached;
     uint32_t *no_paging;
     uint32_t *cached;
+    uint32_t *two_page;
+    uint32_t *one_page;
+    uint32_t *byte_mask;
+    uint32_t *no_paging_2;
     uint8_t  *nmi_done;
     uint8_t  *xlat_done;
+    uint8_t  *two_page_done;
+    uint8_t  *xlat_2_done;
     uint8_t  *miss_dest;
 
     /*Start a fresh allocator block, so nothing below is split across two*/
@@ -959,6 +968,8 @@ build_link_routine(codeblock_t *block)
     lit[LINK_LIT_NMI_ENABLE]        = (uint64_t) (uintptr_t) &nmi_enable;
     lit[LINK_LIT_NMI_MASK]          = (uint64_t) (uintptr_t) &nmi_mask;
     lit[LINK_LIT_RAMMASK]           = (uint64_t) (uintptr_t) &rammask;
+    lit[LINK_LIT_READLOOKUP2]       = (uint64_t) (uintptr_t) readlookup2;
+    lit[LINK_LIT_RAM]               = (uint64_t) (uintptr_t) &ram;
 
     codegen_link_rout = &block_write_data[block_pos];
 
@@ -1094,9 +1105,9 @@ build_link_routine(codeblock_t *block)
     host_arm64_LDR_IMM_X(block, REG_X10, REG_X10, 0);
     miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X10);
 
-    /*The block lookup and the checks made before running it. W9 =
-      block_nr | top_mask << 16 | top << 24*/
-    host_arm64_LDR_IMM_W(block, REG_W9, REG_X1, LINK_SLOT(block_nr));
+    /*The block lookup and the checks made before running it. X9 =
+      block_nr | top_mask << 16 | top << 24 | two_page << 32*/
+    host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block_nr));
     host_arm64_LDRH_IMM(block, REG_W10, REG_X13, 0);
     host_arm64_EOR_REG(block, REG_W10, REG_W10, REG_W9, 0);
     host_arm64_TST_IMM(block, REG_W10, 0xffff);
@@ -1108,9 +1119,11 @@ build_link_routine(codeblock_t *block)
     host_arm64_LDR_IMM_W(block, REG_W10, REG_CPUSTATE, rep_state_offset(&cpu_state.TOP));
     host_arm64_UBFX(block, REG_W13, REG_W9, 16, 8);
     host_arm64_AND_REG(block, REG_W10, REG_W10, REG_W13, 0);
-    host_arm64_UBFX(block, REG_W9, REG_W9, 24, 8);
-    host_arm64_CMP_REG(block, REG_W10, REG_W9);
+    host_arm64_UBFX(block, REG_W13, REG_W9, 24, 8);
+    host_arm64_CMP_REG(block, REG_W10, REG_W13);
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    two_page      = host_arm64_TBNZ_SHORT_(block, REG_X9, 32);
+    two_page_done = &block_write_data[block_pos];
 
     /*Every check passed: the C loop's stores, then the next block. W10 =
       CS access | selector << 16*/
@@ -1170,6 +1183,50 @@ build_link_routine(codeblock_t *block)
     host_arm64_CMP_REG(block, REG_W10, REG_W13);
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
     host_arm64_B(block, xlat_done);
+
+    /*Target spans two pages: the second page's dirty mask, and its page from
+      get_phys_noabrt() at the address the C loop takes from the block's pc,
+      against phys_2. The block's own fields are read as the C loop reads
+      them. A readlookup2[] miss would make get_phys_noabrt() walk the page
+      tables, so it is a miss here. X9 = the block, W10 = the address,
+      W13 = its physical address*/
+    host_arm64_short_branch_set_offset(two_page, &block_write_data[block_pos]);
+    host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block));
+    host_arm64_LDR_IMM_X(block, REG_X10, REG_X9, offsetof(codeblock_t, page_mask2));
+    one_page = host_arm64_CBZ_SHORT_(block, REG_X10);
+    host_arm64_short_branch_set_offset(one_page, two_page_done);
+    host_arm64_LDR_IMM_X(block, REG_X13, REG_X9, offsetof(codeblock_t, dirty_mask2));
+    host_arm64_LDR_IMM_X(block, REG_X13, REG_X13, 0);
+    host_arm64_TSTX_REG(block, REG_X13, REG_X10);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDR_IMM_W(block, REG_W10, REG_X9, offsetof(codeblock_t, pc));
+    host_arm64_LDRH_IMM(block, REG_W13, REG_X9, offsetof(codeblock_t, flags));
+    host_arm64_ADD_IMM(block, REG_W10, REG_W10, 0x400);
+    byte_mask = host_arm64_TBZ_SHORT_(block, REG_W13, 5);
+    host_arm64_SUB_IMM(block, REG_W10, REG_W10, 0x400 - 0x40);
+    host_arm64_short_branch_set_offset(byte_mask, &block_write_data[block_pos]);
+    host_arm64_LDR_IMM_W(block, REG_W13, REG_X1, LINK_SLOT(cr0_bits));
+    no_paging_2 = host_arm64_TBZ_SHORT_(block, REG_W13, 31);
+    host_arm64_LDR_IMM_X(block, REG_X13, REG_X17, LINK_LIT(LINK_LIT_READLOOKUP2));
+    host_arm64_UBFX(block, REG_W16, REG_W10, 12, 20);
+    host_arm64_LDRX_REG_LSL3(block, REG_X13, REG_X13, REG_X16);
+    host_arm64_CMN_IMM(block, REG_W13, 1);
+    miss[nr_miss++] = host_arm64_BEQ_SHORT_(block);
+    host_arm64_LDR_IMM_X(block, REG_X16, REG_X17, LINK_LIT(LINK_LIT_RAM));
+    host_arm64_LDR_IMM_X(block, REG_X16, REG_X16, 0);
+    host_arm64_ADDX_REG_UXTW(block, REG_X13, REG_X13, REG_W10);
+    host_arm64_SUBX_REG(block, REG_X13, REG_X13, REG_X16);
+    xlat_2_done = &block_write_data[block_pos];
+    host_arm64_LDR_IMM_W(block, REG_W16, REG_X9, offsetof(codeblock_t, phys_2));
+    host_arm64_EOR_REG(block, REG_W16, REG_W16, REG_W13, 0);
+    host_arm64_TST_IMM(block, REG_W16, 0xfffff000);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_B(block, two_page_done);
+    host_arm64_short_branch_set_offset(no_paging_2, &block_write_data[block_pos]);
+    host_arm64_LDR_IMM_X(block, REG_X16, REG_X17, LINK_LIT(LINK_LIT_RAMMASK));
+    host_arm64_LDR_IMM_W(block, REG_W16, REG_X16, 0);
+    host_arm64_AND_REG(block, REG_W13, REG_W10, REG_W16, 0);
+    host_arm64_B(block, xlat_2_done);
 
     if (nr_miss > LINK_MAX_MISS)
         fatal("build_link_routine - too many miss branches\n");

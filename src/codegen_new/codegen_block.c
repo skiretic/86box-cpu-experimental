@@ -114,11 +114,11 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     uintptr_t            xlat_val = 0;
     codegen_link_slot_t *slot;
 
-    /*Only a compiled single-page block the hash already points to, with no
-      dirty-list retry state the C loop would still have to clear.*/
+    /*Only a compiled block the hash already points to, with no dirty-list
+      retry state the C loop would still have to clear.*/
     if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
         return;
-    if (block->page_mask2 || block->dirty_list_recompile_hits)
+    if (block->dirty_list_recompile_hits)
         return;
     if (codeblock_hash[HASH(phys)] != get_block_nr(block))
         return;
@@ -167,6 +167,7 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     slot->block_nr   = get_block_nr(block);
     slot->top_mask   = (block->flags & CODEBLOCK_STATIC_TOP) ? 7 : 0;
     slot->top        = (block->flags & CODEBLOCK_STATIC_TOP) ? block->TOP : 0;
+    slot->two_page   = !!block->page_mask2;
     slot->page_mask  = block->page_mask;
     slot->dirty_mask = block->dirty_mask;
     slot->entry      = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];

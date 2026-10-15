@@ -38,6 +38,7 @@ typedef struct codegen_link_slot_t {
     uint16_t     block_nr;    /*get_block_nr(block)*/
     uint8_t      top_mask;    /*7 if the block has a static TOP, otherwise 0*/
     uint8_t      top;         /*block->TOP if top_mask is 7, otherwise 0*/
+    uint8_t      two_page;    /*1 if block->page_mask2 is set*/
     uint64_t     page_mask;   /*block->page_mask*/
     uint64_t    *dirty_mask;  /*block->dirty_mask*/
 } codegen_link_slot_t;
