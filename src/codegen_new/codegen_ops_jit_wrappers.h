@@ -40,12 +40,12 @@ jit_flags_rebuild_zpna(void)
 }
 
 /*flags_rebuild() and flags_rebuild_zpna() write only flags and flags_op, which they leave at
-  FLAGS_UNKNOWN. On arm64 they are called with the cached registers written back but left loaded,
-  and those two are reloaded after the call.*/
+  FLAGS_UNKNOWN. On arm64 and x86-64 they are called with the cached registers written back but
+  left loaded, and those two are reloaded after the call.*/
 static inline void
 call_flags_rebuild(ir_data_t *ir, void (*rebuild)(void))
 {
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
     uop_CALL_FUNC_ORDERED(ir, rebuild);
     uop_MOVZX_REG_PTR_16(ir, IREG_flags, &cpu_state.flags);
     uop_MOV_IMM(ir, IREG_flags_op, FLAGS_UNKNOWN);
