@@ -69,6 +69,8 @@ codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS];
 static void *codegen_link_rout;
 /*The block epilogue that returns X0 as it is*/
 static void *codegen_link_miss_rout;
+/*Exits emitted so far for the block being compiled; each gets its own slot*/
+static int link_site;
 #    endif
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
@@ -921,10 +923,6 @@ build_link_routine(codeblock_t *block)
     uint8_t  *start_data;
     uint32_t *miss[LINK_MAX_MISS];
     int       nr_miss = 0;
-    uint32_t *slot1;
-    uint32_t *slot2;
-    uint32_t *found;
-    uint32_t *found1;
     uint32_t *nmi_set;
     uint32_t *nmi_ok;
     uint32_t *irq_ok;
@@ -977,9 +975,9 @@ build_link_routine(codeblock_t *block)
 
     codegen_link_rout = &block_write_data[block_pos];
 
-    /*X17 = the literal pool. X1 = the slot whose exit_pc and exit_cs match
-      cpu_state.pc and the CS base and whose entry is set; X15 = its entry;
-      W2 = cs + pc*/
+    /*X17 = the literal pool. X1 = the exit's slot, whose exit_pc and exit_cs
+      must match cpu_state.pc and the CS base and whose entry must be set;
+      X15 = its entry; W2 = cs + pc*/
     host_arm64_ADR(block, REG_X17, (int) ((uintptr_t) lit - (uintptr_t) &block_write_data[block_pos]));
     host_arm64_LDR_IMM_W(block, REG_W2, REG_CPUSTATE, rep_state_offset(&cpu_state.pc));
     host_arm64_LDR_IMM_W(block, REG_W3, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.base));
@@ -988,22 +986,8 @@ build_link_routine(codeblock_t *block)
     host_arm64_ADD_REG(block, REG_W2, REG_W2, REG_W3, 0);
     host_arm64_MOVX_REG(block, REG_X1, REG_X0, 0);
     host_arm64_CMPX_REG(block, REG_X5, REG_X4);
-    slot1 = host_arm64_BNE_SHORT_(block);
-    found = host_arm64_CBNZ_SHORT_(block, REG_X15);
-    host_arm64_short_branch_set_offset(slot1, &block_write_data[block_pos]);
-    host_arm64_ADDX_IMM(block, REG_X1, REG_X0, sizeof(codegen_link_slot_t));
-    host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X1, LINK_SLOT(exit_pc));
-    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
-    slot2  = host_arm64_BNE_SHORT_(block);
-    found1 = host_arm64_CBNZ_SHORT_(block, REG_X15);
-    host_arm64_short_branch_set_offset(slot2, &block_write_data[block_pos]);
-    host_arm64_ADDX_IMM(block, REG_X1, REG_X0, 2 * sizeof(codegen_link_slot_t));
-    host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X1, LINK_SLOT(exit_pc));
-    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
     miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X15);
-    host_arm64_short_branch_set_offset(found, &block_write_data[block_pos]);
-    host_arm64_short_branch_set_offset(found1, &block_write_data[block_pos]);
 
     /*Target not freed or changed since the slot was filled. W6 = the slot's
       status | npxc << 16*/
@@ -1365,6 +1349,10 @@ codegen_backend_prologue(codeblock_t *block)
 
     host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
 
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    link_site = 0;
+#    endif
+
     if (block->flags & CODEBLOCK_HAS_FPU) {
         host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, (uintptr_t) &cpu_state.TOP - (uintptr_t) &cpu_state);
         host_arm64_SUB_IMM(block, REG_TEMP, REG_TEMP, block->TOP);
@@ -1375,12 +1363,16 @@ codegen_backend_prologue(codeblock_t *block)
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 /*Leave the block with every register written back and cpu_state.pc set, as
   at its end. The link routine returns through the same register restores on
-  a miss.*/
+  a miss. Each exit has a slot of its own, so the block's end and its taken
+  branches do not take turns filling the same one; a block with more exits
+  than slots shares them from the first again.*/
 void
 codegen_link_exit(codeblock_t *block)
 {
+    codegen_link_slot_t *slot = &codegen_link_slots[get_block_nr(block)][link_site++ % CODEGEN_LINK_SLOTS];
+
     codegen_alloc(block, 20);
-    host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) codegen_link_slots[get_block_nr(block)]);
+    host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);
     host_arm64_B(block, codegen_link_rout);
 }
 #    endif

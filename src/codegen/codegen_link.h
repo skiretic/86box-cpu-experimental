@@ -4,8 +4,9 @@
 #ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 
 /*Block linking. A block that ends normally branches to a shared routine
-  with its own slots in the return register (x0 on arm64, RAX on x86-64).
-  If cpu_state.pc and the CS base match a slot, the routine repeats, inline,
+  with a slot in the return register (x0 on arm64: the exit's own slot;
+  RAX on x86-64: the block's three, searched in turn).
+  If cpu_state.pc and the CS base match the slot, the routine repeats, inline,
   every check exec386_dynarec() and exec386_dynarec_dyn() would make between
   this block and the next one, and if they all pass it does their stores and
   jumps to the next block's link entry, skipping its register saves.
@@ -16,8 +17,9 @@
   and link_gen changes whenever the target block is freed, recompiled or has
   any field below changed.*/
 
-/*Three, so a block whose end and two mid-block exits take turns still links
-  every one of them.*/
+/*Three per block, so its end and two mid-block exits each link
+  (CODEGEN_LINK_SLOT_PER_EXIT: one each, the fourth exit sharing the first;
+  otherwise searched in turn).*/
 #define CODEGEN_LINK_SLOTS 3
 
 typedef struct codegen_link_slot_t {

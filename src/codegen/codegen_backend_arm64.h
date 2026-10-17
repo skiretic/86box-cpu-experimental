@@ -32,6 +32,8 @@
    iteration that the link routine does not repeat. */
 #if !defined(USE_GDBSTUB) && !defined(USE_ACYCS) && !defined(USE_DEBUG_REGS_486)
 #    define CODEGEN_BACKEND_HAS_BLOCK_LINK
+/* A block's exits each hand the routine their own slot, not the block's three. */
+#    define CODEGEN_LINK_SLOT_PER_EXIT
 void codegen_link_exit(codeblock_t *block);
 #endif
 

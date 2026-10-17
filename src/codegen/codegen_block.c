@@ -139,6 +139,10 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     } else if (((virt & rammask) & ~0xfff) != (phys & ~0xfff))
         return;
 
+#ifdef CODEGEN_LINK_SLOT_PER_EXIT
+    /*The exit's own slot, whatever it held*/
+    slot = from;
+#else
     if (from[0].exit_pc == cpu_state.pc && from[0].exit_cs == cs)
         slot = &from[0];
     else if (from[1].exit_pc == cpu_state.pc && from[1].exit_cs == cs)
@@ -150,6 +154,7 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
         from[1] = from[0];
         slot    = &from[0];
     }
+#endif
 
     slot->entry      = NULL;
     slot->exit_pc    = cpu_state.pc;
