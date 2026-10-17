@@ -46,6 +46,7 @@ void *codegen_mem_store_double;
 
 void *codegen_gpf_rout;
 void *codegen_exit_rout;
+void *codegen_int7_rout;
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
   /*Note: while EAX and EDX are normally volatile registers under x86
@@ -378,6 +379,16 @@ codegen_backend_init(void)
     host_x86_POP(block, REG_RBP);
     host_x86_POP(block, REG_RBX);
     host_x86_RET(block);
+
+    /*Device-not-available fault, for checks that branch here with oldpc set*/
+    codegen_int7_rout = routine_start(block);
+#    if _WIN64
+    host_x86_MOV32_REG_IMM(block, REG_ECX, 7);
+#    else
+    host_x86_MOV32_REG_IMM(block, REG_EDI, 7);
+#    endif
+    host_x86_CALL(block, (void *) x86_int);
+    host_x86_JMP(block, codegen_exit_rout);
 
     block_write_data = NULL;
 

@@ -144,7 +144,7 @@ ropFXCH(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), uint3
 uint32_t
 ropWAIT(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
 {
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
     if (fpu_softfloat)
         return 0;
 
