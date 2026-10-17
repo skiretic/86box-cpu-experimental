@@ -4,12 +4,13 @@
 #ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 
 /*Block linking. A block that ends normally branches to a shared routine
-  with x0 = its own slots. If cpu_state.pc and the CS base match a slot,
-  the routine repeats, inline, every check exec386_dynarec() and
-  exec386_dynarec_dyn() would make between this block and the next one, and
-  if they all pass it does their stores and jumps to the next block's link
-  entry, skipping its register saves. Anything else returns to C as before,
-  still with x0 = the slots (codegen_exit_rout returns NULL).
+  with its own slots in the return register (x0 on arm64, RAX on x86-64).
+  If cpu_state.pc and the CS base match a slot, the routine repeats, inline,
+  every check exec386_dynarec() and exec386_dynarec_dyn() would make between
+  this block and the next one, and if they all pass it does their stores and
+  jumps to the next block's link entry, skipping its register saves.
+  Anything else returns to C as before, still returning the slots
+  (codegen_exit_rout returns NULL).
 
   A slot never needs cutting to stay correct: it is checked on every use,
   and link_gen changes whenever the target block is freed, recompiled or has
@@ -52,7 +53,15 @@ extern codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS];
 
 /*Byte offset of the link entry from &block->data[BLOCK_START]: the first
   instruction after the prologue's register saves.*/
-#define CODEGEN_LINK_ENTRY_OFFSET 24
+#if defined(__aarch64__) || defined(_M_ARM64)
+#    define CODEGEN_LINK_ENTRY_OFFSET 24
+#elif defined(_WIN64)
+/*Eight pushes, the frame and the XMM6/XMM7 saves*/
+#    define CODEGEN_LINK_ENTRY_OFFSET 28
+#else
+/*Six pushes and the frame*/
+#    define CODEGEN_LINK_ENTRY_OFFSET 14
+#endif
 
 /*Fill a slot of the pair the previous block returned, for the block about
   to run at cs:pc from physical address phys. Does nothing if the block or

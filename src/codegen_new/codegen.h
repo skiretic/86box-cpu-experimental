@@ -49,7 +49,7 @@ typedef struct codeblock_t {
        spaced-out hits. */
     uint16_t dirty_list_last_epoch;
 #endif
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__amd64__) || defined(_M_X64)
     /*Changes whenever the block is freed, recompiled or has a field a link
       slot relies on changed; never 0. See codegen_link.h.*/
     uint32_t link_gen;

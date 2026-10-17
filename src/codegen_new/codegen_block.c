@@ -118,8 +118,10 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
       retry state the C loop would still have to clear.*/
     if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
         return;
+#if defined(__aarch64__) || defined(_M_ARM64)
     if (block->dirty_list_recompile_hits)
         return;
+#endif
     if (codeblock_hash[HASH(phys)] != get_block_nr(block))
         return;
     if (cr0 >> 31) {
