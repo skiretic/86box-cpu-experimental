@@ -819,10 +819,12 @@ extern int codegen_fp_enter(void);
         codegen_fpu_entered = 0;                             \
     } while (0)
 #else
+/*The inline check changes nothing the IR caches unless it raises #NM, which
+  leaves the block, so cached registers are written back but left loaded*/
 #define uop_FP_ENTER(ir)                                    \
     do {                                                    \
         if (!codegen_fpu_entered)                           \
-            uop_gen_imm(UOP_FP_ENTER, ir, cpu_state.oldpc); \
+            uop_gen_imm(UOP_FP_ENTER_ORDERED, ir, cpu_state.oldpc); \
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
     } while (0)
