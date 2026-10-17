@@ -2368,7 +2368,7 @@ rebuild_c(ir_data_t *ir)
     }
 
     if (needs_rebuild) {
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
         /*flags_rebuild_c() writes only flags, so the cached registers are
           written back but left loaded, and flags is reloaded after it.*/
         uop_CALL_FUNC_ORDERED(ir, jit_flags_rebuild_c);
