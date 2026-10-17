@@ -2297,7 +2297,9 @@ imul_common(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op_32
         codegen_check_seg_read(block, ir, target_seg);
         CHECK_SEG_LIMITS(block, ir, target_seg, IREG_eaaddr, size32 ? 3 : 1);
         src = size32 ? IREG_temp0 : IREG_temp0_W;
-        uop_MEM_LOAD_REG(ir, src, ireg_seg_base(target_seg), IREG_eaaddr);
+        /*As the interpreter's geteal(): a direct read with no misaligned
+          charge for an operand inside its page*/
+        uop_MEM_LOAD_REG_EA(ir, src, ireg_seg_base(target_seg), IREG_eaaddr);
     }
 
     if (imm_len) {
