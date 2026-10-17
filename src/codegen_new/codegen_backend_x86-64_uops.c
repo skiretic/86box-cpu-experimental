@@ -193,9 +193,91 @@ codegen_ANDN(codeblock_t *block, uop_t *uop)
 }
 
 static int
+codegen_IMUL(codeblock_t *block, uop_t *uop)
+{
+    int dest_reg   = HOST_REG_GET(uop->dest_reg_a_real);
+    int src_reg_a  = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
+    int dest_size  = IREG_GET_SIZE(uop->dest_reg_a_real);
+    int src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
+    int src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
+
+    /*The product is commutative, so a destination that is either source
+      needs no copy. The 16-bit form leaves the rest of dest_reg alone.*/
+    if (REG_IS_L(dest_size) && REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
+        if (dest_reg == src_reg_b)
+            host_x86_IMUL32_REG_REG(block, dest_reg, src_reg_a);
+        else {
+            if (dest_reg != src_reg_a)
+                host_x86_MOV32_REG_REG(block, dest_reg, src_reg_a);
+            host_x86_IMUL32_REG_REG(block, dest_reg, src_reg_b);
+        }
+    } else if (REG_IS_W(dest_size) && REG_IS_W(src_size_a) && REG_IS_W(src_size_b)) {
+        if (dest_reg == src_reg_b)
+            host_x86_IMUL16_REG_REG(block, dest_reg, src_reg_a);
+        else {
+            if (dest_reg != src_reg_a)
+                host_x86_MOV16_REG_REG(block, dest_reg, src_reg_a);
+            host_x86_IMUL16_REG_REG(block, dest_reg, src_reg_b);
+        }
+    } else
+        fatal("IMUL %02x %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real, uop->src_reg_b_real);
+
+    return 0;
+}
+static int
+codegen_IMUL_OVERFLOW(codeblock_t *block, uop_t *uop)
+{
+    int dest_reg   = HOST_REG_GET(uop->dest_reg_a_real);
+    int src_reg_a  = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
+    int dest_size  = IREG_GET_SIZE(uop->dest_reg_a_real);
+    int src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
+    int src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
+
+    /*Two-operand IMUL sets OF when the signed product does not fit in the
+      operand size, which is the interpreter's CF/OF condition. ECX is not an
+      allocated register, so it holds the product.*/
+    if (REG_IS_L(dest_size) && REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
+        host_x86_MOV32_REG_REG(block, REG_ECX, src_reg_a);
+        host_x86_IMUL32_REG_REG(block, REG_ECX, src_reg_b);
+    } else if (REG_IS_L(dest_size) && REG_IS_W(src_size_a) && REG_IS_W(src_size_b)) {
+        host_x86_MOV32_REG_REG(block, REG_ECX, src_reg_a);
+        host_x86_IMUL16_REG_REG(block, REG_ECX, src_reg_b);
+    } else
+        fatal("IMUL_OVERFLOW %02x %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real, uop->src_reg_b_real);
+    host_x86_SETO8_REG(block, REG_ECX);
+    host_x86_MOVZX_REG_32_8(block, dest_reg, REG_ECX);
+
+    return 0;
+}
+
+static int
 codegen_CALL_FUNC(codeblock_t *block, uop_t *uop)
 {
     host_x86_CALL(block, uop->p);
+
+    return 0;
+}
+
+/*An order barrier leaves the cached registers loaded, and EAX and EDX are
+  not preserved by the callee, so they are saved around the call. Two pushes
+  keep RSP 16-byte aligned; Windows also needs the 32-byte home area below
+  them, so the callee does not overwrite the saved values.*/
+static int
+codegen_CALL_FUNC_ORDERED(codeblock_t *block, uop_t *uop)
+{
+    host_x86_PUSH(block, REG_RAX);
+    host_x86_PUSH(block, REG_RDX);
+#    if _WIN64
+    host_x86_SUB64_REG_IMM(block, REG_RSP, 0x20);
+#    endif
+    host_x86_CALL(block, uop->p);
+#    if _WIN64
+    host_x86_ADD64_REG_IMM(block, REG_RSP, 0x20);
+#    endif
+    host_x86_POP(block, REG_RDX);
+    host_x86_POP(block, REG_RAX);
 
     return 0;
 }
@@ -1051,6 +1133,30 @@ codegen_MEM_LOAD_REG(codeblock_t *block, uop_t *uop)
     } else if (REG_IS_Q(dest_size)) {
         host_x86_MOVQ_XREG_XREG(block, dest_reg, REG_XMM_TEMP);
     }
+
+    return 0;
+}
+static int
+codegen_MEM_LOAD_REG_EA(codeblock_t *block, uop_t *uop)
+{
+    int dest_reg  = HOST_REG_GET(uop->dest_reg_a_real);
+    int seg_reg   = HOST_REG_GET(uop->src_reg_a_real);
+    int addr_reg  = HOST_REG_GET(uop->src_reg_b_real);
+    int dest_size = IREG_GET_SIZE(uop->dest_reg_a_real);
+
+    host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
+    if (REG_IS_W(dest_size))
+        host_x86_CALL(block, codegen_mem_load_word_ea);
+    else if (REG_IS_L(dest_size))
+        host_x86_CALL(block, codegen_mem_load_long_ea);
+    else
+        fatal("MEM_LOAD_REG_EA - %02x\n", uop->dest_reg_a_real);
+    host_x86_TEST32_REG(block, REG_ESI, REG_ESI);
+    host_x86_JNZ(block, codegen_exit_rout);
+    if (REG_IS_W(dest_size))
+        host_x86_MOV16_REG_REG(block, dest_reg, REG_ECX);
+    else
+        host_x86_MOV32_REG_REG(block, dest_reg, REG_ECX);
 
     return 0;
 }
@@ -2888,6 +2994,9 @@ codegen_XOR_IMM(codeblock_t *block, uop_t *uop)
 
 const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CALL_FUNC & UOP_MASK] = codegen_CALL_FUNC,
+    [UOP_CALL_FUNC_ORDERED &
+        UOP_MASK]
+    = codegen_CALL_FUNC_ORDERED,
     [UOP_CALL_FUNC_RESULT &
         UOP_MASK]
     = codegen_CALL_FUNC_RESULT,
@@ -2942,6 +3051,9 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_MEM_LOAD_REG &
         UOP_MASK]
     = codegen_MEM_LOAD_REG,
+    [UOP_MEM_LOAD_REG_EA &
+        UOP_MASK]
+    = codegen_MEM_LOAD_REG_EA,
     [UOP_MEM_LOAD_SINGLE &
         UOP_MASK]
     = codegen_MEM_LOAD_SINGLE,
@@ -3020,6 +3132,12 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_ANDN &
         UOP_MASK]
     = codegen_ANDN,
+    [UOP_IMUL &
+        UOP_MASK]
+    = codegen_IMUL,
+    [UOP_IMUL_OVERFLOW &
+        UOP_MASK]
+    = codegen_IMUL_OVERFLOW,
     [UOP_AND_IMM &
         UOP_MASK]
     = codegen_AND_IMM,

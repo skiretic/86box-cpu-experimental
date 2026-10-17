@@ -27,6 +27,14 @@
 #    define RM_OP_SHR 0x28
 #    define RM_OP_SAR 0x38
 
+/*Move to a new code chunk now if size bytes might not fit in this one, so
+  code emitted next, up to size bytes, stays in one chunk.*/
+void
+codegen_alloc(codeblock_t *block, int size)
+{
+    codegen_alloc_bytes(block, size);
+}
+
 static inline void
 call(codeblock_t *block, uintptr_t func)
 {
@@ -331,6 +339,29 @@ host_x86_CMP32_REG_REG(codeblock_t *block, int src_reg_a, int src_reg_b)
 }
 
 void
+host_x86_IMUL16_REG_REG(codeblock_t *block, int dst_reg, int src_reg)
+{
+#ifdef RECOMPILER_DEBUG
+    if ((dst_reg & 8) || (src_reg & 8))
+        fatal("host_x86_IMUL16_REG_REG - bad reg\n");
+#endif
+
+    codegen_alloc_bytes(block, 4);
+    codegen_addbyte4(block, 0x66, 0x0f, 0xaf, 0xc0 | (dst_reg << 3) | src_reg); /*IMUL dst_reg, src_reg*/
+}
+void
+host_x86_IMUL32_REG_REG(codeblock_t *block, int dst_reg, int src_reg)
+{
+#ifdef RECOMPILER_DEBUG
+    if ((dst_reg & 8) || (src_reg & 8))
+        fatal("host_x86_IMUL32_REG_REG - bad reg\n");
+#endif
+
+    codegen_alloc_bytes(block, 3);
+    codegen_addbyte3(block, 0x0f, 0xaf, 0xc0 | (dst_reg << 3) | src_reg); /*IMUL dst_reg, src_reg*/
+}
+
+void
 host_x86_JMP(codeblock_t *block, void *p)
 {
     jmp(block, (uintptr_t) p);
@@ -351,6 +382,13 @@ host_x86_JZ(codeblock_t *block, void *p)
     codegen_addlong(block, (uintptr_t) p - (uintptr_t) &block_write_data[block_pos + 4]);
 }
 
+uint8_t *
+host_x86_JNBE_short(codeblock_t *block)
+{
+    codegen_alloc_bytes(block, 2);
+    codegen_addbyte2(block, 0x77, 0); /*JNBE*/
+    return &block_write_data[block_pos - 1];
+}
 uint8_t *
 host_x86_JNZ_short(codeblock_t *block)
 {
@@ -1623,6 +1661,19 @@ host_x86_SAR32_IMM(codeblock_t *block, int dst_reg, int shift)
 #endif
     codegen_alloc_bytes(block, 3);
     codegen_addbyte3(block, 0xc1, 0xc0 | RM_OP_SAR | dst_reg, shift); /*SAR dst_reg, shift*/
+}
+
+void
+host_x86_SETO8_REG(codeblock_t *block, int dst_reg)
+{
+    /*Without a REX prefix, 8-bit register numbers 4-7 are AH-BH*/
+#ifdef RECOMPILER_DEBUG
+    if (dst_reg & ~3)
+        fatal("host_x86_SETO8_REG - bad reg\n");
+#endif
+
+    codegen_alloc_bytes(block, 3);
+    codegen_addbyte3(block, 0x0f, 0x90, 0xc0 | dst_reg); /*SETO dst_reg*/
 }
 
 void

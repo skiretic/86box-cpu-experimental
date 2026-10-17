@@ -2504,7 +2504,7 @@ imul_rebuild_flags(ir_data_t *ir)
 static int
 imul_supported(void)
 {
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
     return 1;
 #else
     return 0;
