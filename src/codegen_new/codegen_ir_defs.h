@@ -743,10 +743,10 @@ extern int codegen_fp_enter(void);
 #define uop_CALL_FUNC(ir, p)                                     uop_gen_pointer(UOP_CALL_FUNC, ir, p)
 #define uop_CALL_FUNC_RESULT(ir, dst_reg, p)                     uop_gen_reg_dst_pointer(UOP_CALL_FUNC_RESULT, ir, dst_reg, p)
 #define uop_CALL_FUNC_ORDERED(ir, p)                             uop_gen_pointer(UOP_CALL_FUNC_ORDERED, ir, p)
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
 #define uop_CALL_FUNC_RESULT_ORDERED(ir, dst_reg, p)             uop_gen_reg_dst_pointer(UOP_CALL_FUNC_RESULT_ORDERED, ir, dst_reg, p)
 #else
-/*Only arm64 keeps the cached registers in callee-saved host registers*/
+/*Only the arm64 and x86-64 backends keep the cached registers across a C call*/
 #define uop_CALL_FUNC_RESULT_ORDERED(ir, dst_reg, p)             uop_CALL_FUNC_RESULT(ir, dst_reg, p)
 #endif
 #define uop_CALL_INSTRUCTION_FUNC(ir, p, imm)                    uop_gen_pointer_imm(UOP_CALL_INSTRUCTION_FUNC, ir, p, imm)
