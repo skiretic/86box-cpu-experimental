@@ -143,7 +143,7 @@ int (*const codegen_rep_elem[2][3][2])(x86seg *seg) = {
     },
 };
 
-#if defined __aarch64__ || defined _M_ARM64
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
 /*The routine runs the whole instruction and leaves the guest registers and
   the cycle count in cpu_state, so they are reloaded after it. The cycle
   figures are the interpreter's, and do not change while compiled blocks

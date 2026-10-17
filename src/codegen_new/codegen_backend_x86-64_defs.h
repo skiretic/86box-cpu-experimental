@@ -68,3 +68,5 @@ extern void *codegen_mem_store_double;
 extern void *codegen_gpf_rout;
 extern void *codegen_exit_rout;
 extern void *codegen_int7_rout;
+/*REP MOVS/STOS routines, indexed by [STOS][log2 element size][32-bit addressing]*/
+extern void *codegen_rep_rout[2][3][2];
