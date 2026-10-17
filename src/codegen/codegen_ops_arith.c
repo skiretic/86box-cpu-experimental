@@ -2285,6 +2285,9 @@ imul_common(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op_32
     return 0;
 #endif
     codegen_mark_code_present(block, cs + op_pc, 1);
+    /*As on the interpreter path, the cycles so far are charged before IMUL
+      can fault*/
+    codegen_accumulate_flush(ir);
     uop_CALL_FUNC(ir, jit_flags_rebuild);
 
     if ((fetchdat & 0xc0) == 0xc0)
