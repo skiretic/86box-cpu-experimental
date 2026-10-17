@@ -434,6 +434,34 @@ codegen_CMP_JNBE(codeblock_t *block, uop_t *uop)
     return 0;
 }
 
+/*COMISD sets CF, ZF and PF for an unordered pair, so JBE and JNBE take a NaN
+  as outside*/
+static int
+codegen_FCMP_JWITHIN_DEST(codeblock_t *block, uop_t *uop)
+{
+    int       src_reg  = HOST_REG_GET(uop->src_reg_a_real);
+    int       lo_reg   = HOST_REG_GET(uop->src_reg_b_real);
+    int       hi_reg   = HOST_REG_GET(uop->src_reg_c_real);
+    int       src_size = IREG_GET_SIZE(uop->src_reg_a_real);
+    int       lo_size  = IREG_GET_SIZE(uop->src_reg_b_real);
+    int       hi_size  = IREG_GET_SIZE(uop->src_reg_c_real);
+    uint32_t *outside;
+
+    if (REG_IS_D(src_size) && REG_IS_D(lo_size) && REG_IS_D(hi_size)) {
+        host_x86_COMISD_XREG_XREG(block, hi_reg, src_reg);
+        outside = host_x86_JBE_long(block);
+        host_x86_COMISD_XREG_XREG(block, src_reg, lo_reg);
+        uop->p   = host_x86_JNBE_long(block);
+        *outside = (uint32_t) ((uintptr_t) &block_write_data[block_pos] - (uintptr_t) outside) - 4;
+    }
+#    ifdef RECOMPILER_DEBUG
+    else
+        fatal("FCMP_JWITHIN_DEST %02x %02x %02x\n", uop->src_reg_a_real, uop->src_reg_b_real, uop->src_reg_c_real);
+#    endif
+
+    return 0;
+}
+
 static int
 codegen_CMP_JNB_DEST(codeblock_t *block, uop_t *uop)
 {
@@ -3551,6 +3579,9 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CMP_JNBE &
         UOP_MASK]
     = codegen_CMP_JNBE,
+    [UOP_FCMP_JWITHIN_DEST &
+        UOP_MASK]
+    = codegen_FCMP_JWITHIN_DEST,
 
     [UOP_CMP_JNB_DEST &
         UOP_MASK]

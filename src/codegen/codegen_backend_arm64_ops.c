@@ -141,6 +141,7 @@
 #    define OPCODE_FCMEQ_V2S          (0x0e20e400)
 #    define OPCODE_FCMGE_V2S          (0x2e20e400)
 #    define OPCODE_FCMGT_V2S          (0x2ea0e400)
+#    define OPCODE_FCCMP_D            (0x1e600400)
 #    define OPCODE_FCMP_D             (0x1e602000)
 #    define OPCODE_FCVT_D_S           (0x1e22c000)
 #    define OPCODE_FCVT_S_D           (0x1e624000)
@@ -1113,6 +1114,12 @@ void
 host_arm64_FCMP_D(codeblock_t *block, int src_n_reg, int src_m_reg)
 {
     codegen_addlong(block, OPCODE_FCMP_D | Rn(src_n_reg) | Rm(src_m_reg));
+}
+/*FCCMP: the flags of src_n_reg compared with src_m_reg when GT holds, else nzcv*/
+void
+host_arm64_FCCMP_D_GT(codeblock_t *block, int src_n_reg, int src_m_reg, int nzcv)
+{
+    codegen_addlong(block, OPCODE_FCCMP_D | CSEL_COND(COND_GT) | Rn(src_n_reg) | Rm(src_m_reg) | nzcv);
 }
 
 void

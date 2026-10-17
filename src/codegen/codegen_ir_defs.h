@@ -376,8 +376,11 @@
 #define UOP_PMULHRW (UOP_TYPE_PARAMS_REGS | 0xc7)
 /*UOP_PAVGUSB - (packed byte) dest_reg = (src_reg_a + src_reg_b + 1) >> 1*/
 #define UOP_PAVGUSB (UOP_TYPE_PARAMS_REGS | 0xc8)
+/*UOP_FCMP_JWITHIN_DEST - if (src_reg_b < src_reg_a < src_reg_c), all ordered (a NaN
+  anywhere fails), then jump to ptr*/
+#define UOP_FCMP_JWITHIN_DEST (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xce | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
 
-#define UOP_MAX     0xce
+#define UOP_MAX     0xcf
 
 #define UOP_INVALID 0xff
 
@@ -653,7 +656,7 @@ uop_gen_reg_src2_imm(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_re
     uop->imm_data  = imm;
 }
 
-static inline void
+static inline int
 uop_gen_reg_src3(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b, int src_reg_c)
 {
     uop_t *uop = uop_alloc(ir, uop_type);
@@ -662,6 +665,8 @@ uop_gen_reg_src3(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b,
     uop->src_reg_a = codegen_reg_read(src_reg_a);
     uop->src_reg_b = codegen_reg_read(src_reg_b);
     uop->src_reg_c = codegen_reg_read(src_reg_c);
+
+    return ir->wr_pos - 1;
 }
 
 static inline void
@@ -807,6 +812,7 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
 #define uop_CMP_JB(ir, src_reg_a, src_reg_b, p)                  uop_gen_reg_src2_pointer(UOP_CMP_JB, ir, src_reg_a, src_reg_b, p)
 #define uop_CMP_JNBE(ir, src_reg_a, src_reg_b, p)                uop_gen_reg_src2_pointer(UOP_CMP_JNBE, ir, src_reg_a, src_reg_b, p)
 
+#define uop_FCMP_JWITHIN_DEST(ir, src_reg, lo_reg, hi_reg)      uop_gen_reg_src3(UOP_FCMP_JWITHIN_DEST, ir, src_reg, lo_reg, hi_reg)
 #define uop_CMP_JNB_DEST(ir, src_reg_a, src_reg_b)               uop_gen_reg_src2(UOP_CMP_JNB_DEST, ir, src_reg_a, src_reg_b)
 #define uop_CMP_JNBE_DEST(ir, src_reg_a, src_reg_b)              uop_gen_reg_src2(UOP_CMP_JNBE_DEST, ir, src_reg_a, src_reg_b)
 #define uop_CMP_JNL_DEST(ir, src_reg_a, src_reg_b)               uop_gen_reg_src2(UOP_CMP_JNL_DEST, ir, src_reg_a, src_reg_b)

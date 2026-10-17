@@ -316,6 +316,30 @@ codegen_CMP_JNBE(codeblock_t *block, uop_t *uop)
     return 0;
 }
 
+/*The compare with the low bound sets the flags; the conditional compare
+  with the high bound runs only when the value is above it (GT, which a NaN
+  fails), and otherwise sets V alone, which fails GT as well*/
+static int
+codegen_FCMP_JWITHIN_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg    = HOST_REG_GET(uop->src_reg_a_real);
+    int lo_reg     = HOST_REG_GET(uop->src_reg_b_real);
+    int hi_reg     = HOST_REG_GET(uop->src_reg_c_real);
+    int src_size   = IREG_GET_SIZE(uop->src_reg_a_real);
+    int lo_size    = IREG_GET_SIZE(uop->src_reg_b_real);
+    int hi_size    = IREG_GET_SIZE(uop->src_reg_c_real);
+
+    if (REG_IS_D(src_size) && REG_IS_D(lo_size) && REG_IS_D(hi_size)) {
+        host_arm64_FCMP_D(block, src_reg, lo_reg);
+        host_arm64_FCCMP_D_GT(block, hi_reg, src_reg, 1);
+    } else
+        fatal("FCMP_JWITHIN_DEST %02x %02x %02x\n", uop->src_reg_a_real, uop->src_reg_b_real, uop->src_reg_c_real);
+
+    uop->p = host_arm64_BGT_(block);
+
+    return 0;
+}
+
 static int
 codegen_CMP_JNB_DEST(codeblock_t *block, uop_t *uop)
 {
@@ -3547,6 +3571,9 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CMP_JNBE &
         UOP_MASK]
     = codegen_CMP_JNBE,
+    [UOP_FCMP_JWITHIN_DEST &
+        UOP_MASK]
+    = codegen_FCMP_JWITHIN_DEST,
 
     [UOP_CMP_JNB_DEST &
         UOP_MASK]

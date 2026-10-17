@@ -116,6 +116,7 @@ void host_arm64_FADDP_V2S(codeblock_t *block, int dst_reg, int src_n_reg, int sr
 void host_arm64_FCMEQ_V2S(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
 void host_arm64_FCMGE_V2S(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
 void host_arm64_FCMGT_V2S(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
+void host_arm64_FCCMP_D_GT(codeblock_t *block, int src_n_reg, int src_m_reg, int nzcv);
 void host_arm64_FCMP_D(codeblock_t *block, int src_n_reg, int src_m_reg);
 void host_arm64_FDIV_D(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
 void host_arm64_FDIV_S(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
