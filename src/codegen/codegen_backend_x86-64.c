@@ -63,6 +63,8 @@ void *codegen_rep_rout[2][3][2];
 codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS];
 
 static void *codegen_link_rout;
+/*Exits emitted so far for the block being compiled; each gets its own slot*/
+static int link_site;
 #    endif
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
@@ -1069,7 +1071,7 @@ lx_abs(codeblock_t *block, int p66, int w, uint16_t op, int reg, void *p)
     }
 }
 
-/*Entered by a jump from the end of a block, with RAX = the block's slots and
+/*Entered by a jump from the end of a block, with RAX = the exit's slot and
   RBP = &cpu_state + 128. Repeats what exec386_dynarec() and
   exec386_dynarec_dyn() do between that block and the next one, assuming
   nothing in that stretch has anything to do: if any check fails it returns
@@ -1087,8 +1089,6 @@ build_link_routine(codeblock_t *block)
     static const uint8_t load_xlat[4] = { 0x49, 0x8b, 0x14, 0xd3 }; /*MOV RDX, [R11 + RDX*8]*/
     int32_t *miss[LINK_MAX_MISS];
     int      nr_miss = 0;
-    int32_t *found[CODEGEN_LINK_SLOTS - 1];
-    int32_t *next[2] = { NULL, NULL };
     int32_t *nmi_set;
     int32_t *nmi_ok;
     int32_t *irq_ok;
@@ -1110,37 +1110,21 @@ build_link_routine(codeblock_t *block)
     codegen_alloc(block, BLOCK_MAX - JMP_LEN_BYTES);
     codegen_link_rout = rx_here();
 
-    /*RBX = the slot whose exit_pc and exit_cs match cpu_state.pc and the CS
-      base and whose entry is set; R15 = its entry; ESI = cs + pc*/
+    /*RBX = the exit's slot, whose exit_pc and exit_cs must match cpu_state.pc
+      and the CS base and whose entry must be set; R15 = its entry;
+      ESI = cs + pc*/
     rx_rm(block, 0, 0, 0x8b, REG_RCX, REG_RBP, rx_state(&cpu_state.pc));
     rx_rm(block, 0, 0, 0x8b, REG_RDX, REG_RBP, rx_state(&cpu_state.seg_cs.base));
     rx_rr(block, 0, 0, 0x89, REG_RCX, REG_RSI); /*MOV ESI, ECX*/
     rx_rr(block, 0, 0, 0x01, REG_RDX, REG_RSI); /*ADD ESI, EDX*/
-    for (int c = 0; c < CODEGEN_LINK_SLOTS; c++) {
-        const int last = (c == CODEGEN_LINK_SLOTS - 1);
-
-        for (int n = 0; n < 2; n++) {
-            if (next[n])
-                rx_patch(next[n], rx_here());
-        }
-        rx_rr(block, 0, 1, 0x89, REG_RAX, REG_RBX); /*MOV RBX, RAX*/
-        if (c)
-            rx_alu_ri(block, 1, 0, REG_RBX, c * sizeof(codegen_link_slot_t));
-        rx_rm(block, 0, 0, 0x3b, REG_RCX, REG_RBX, LINK_SLOT(exit_pc));
-        next[0] = rx_jcc(block, RX_CC_NZ);
-        rx_rm(block, 0, 0, 0x3b, REG_RDX, REG_RBX, LINK_SLOT(exit_cs));
-        next[1] = rx_jcc(block, RX_CC_NZ);
-        rx_rm(block, 0, 1, 0x8b, REG_R15, REG_RBX, LINK_SLOT(entry));
-        rx_rr(block, 0, 1, 0x85, REG_R15, REG_R15);
-        if (last) {
-            miss[nr_miss++] = next[0];
-            miss[nr_miss++] = next[1];
-            miss[nr_miss++] = rx_jcc(block, RX_CC_Z);
-        } else
-            found[c] = rx_jcc(block, RX_CC_NZ);
-    }
-    for (int c = 0; c < CODEGEN_LINK_SLOTS - 1; c++)
-        rx_patch(found[c], rx_here());
+    rx_rr(block, 0, 1, 0x89, REG_RAX, REG_RBX); /*MOV RBX, RAX*/
+    rx_rm(block, 0, 0, 0x3b, REG_RCX, REG_RBX, LINK_SLOT(exit_pc));
+    miss[nr_miss++] = rx_jcc(block, RX_CC_NZ);
+    rx_rm(block, 0, 0, 0x3b, REG_RDX, REG_RBX, LINK_SLOT(exit_cs));
+    miss[nr_miss++] = rx_jcc(block, RX_CC_NZ);
+    rx_rm(block, 0, 1, 0x8b, REG_R15, REG_RBX, LINK_SLOT(entry));
+    rx_rr(block, 0, 1, 0x85, REG_R15, REG_R15);
+    miss[nr_miss++] = rx_jcc(block, RX_CC_Z);
 
     /*Target not freed or changed since the slot was filled. RDI = it*/
     rx_rm(block, 0, 1, 0x8b, REG_RDI, REG_RBX, LINK_SLOT(block));
@@ -1509,6 +1493,7 @@ codegen_backend_prologue(codeblock_t *block)
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
     if (block_pos != BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET)
         fatal("codegen_backend_prologue - link entry at %i\n", block_pos);
+    link_site = 0;
 #    endif
     host_x86_MOV64_REG_IMM(block, REG_RBP, ((uintptr_t) &cpu_state) + 128);
     if (block->flags & CODEBLOCK_HAS_FPU) {
@@ -1523,11 +1508,15 @@ codegen_backend_prologue(codeblock_t *block)
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 /*Leave the block with every register written back and cpu_state.pc set, as
   at its end. The link routine returns through the same register restores on
-  a miss.*/
+  a miss. Each exit has a slot of its own, so the block's end and its taken
+  branches do not take turns filling the same one; a block with more exits
+  than slots shares them from the first again.*/
 void
 codegen_link_exit(codeblock_t *block)
 {
-    host_x86_MOV64_REG_IMM(block, REG_RAX, (uint64_t) (uintptr_t) codegen_link_slots[get_block_nr(block)]);
+    codegen_link_slot_t *slot = &codegen_link_slots[get_block_nr(block)][link_site++ % CODEGEN_LINK_SLOTS];
+
+    host_x86_MOV64_REG_IMM(block, REG_RAX, (uint64_t) (uintptr_t) slot);
     host_x86_JMP(block, codegen_link_rout);
 }
 #    endif
