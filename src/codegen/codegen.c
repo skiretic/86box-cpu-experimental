@@ -454,9 +454,10 @@ static uint8_t opcode_0f_modrm[256] = {
 // clang-format on
 
 /* ES set: an unmasked exception of the legacy FPU is pending, taken before
-   a waiting x87 or an MMX instruction, as the interpreter takes it
+   an MMX instruction, as the interpreter takes it
    (x87_legacy_pending_entry). ES is tested inline; the helper is called
-   only when it is set. */
+   only when it is set. A waiting x87 instruction has the same test in
+   codegen_generate_call, so its entry does not repeat it. */
 void
 codegen_fp_pending_check(ir_data_t *ir)
 {

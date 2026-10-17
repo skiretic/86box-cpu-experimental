@@ -751,9 +751,9 @@ extern int codegen_mmx_fpu_pending(void);
 extern int codegen_fp_enter(void);
 extern int codegen_fp_pending(void);
 /* A pending exception of the legacy FPU (ES set by an unmasked one) is
-   taken before a waiting x87 or an MMX instruction, as the interpreter
-   takes it: ES tested inline, the helper called only when it is set
-   (codegen.c) */
+   taken before an MMX instruction, as the interpreter takes it: ES tested
+   inline, the helper called only when it is set (codegen.c). A waiting x87
+   instruction's is in codegen_generate_call. */
 extern void codegen_fp_pending_check(ir_data_t *ir);
 extern int  codegen_fpu_rc_nearest(ir_data_t *ir);
 extern int  codegen_fpu_class_dirty;
@@ -853,7 +853,6 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
         if (!codegen_fpu_entered) {                         \
             uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);   \
             uop_gen_imm(UOP_FP_ENTER_ORDERED, ir, cpu_state.oldpc); \
-            codegen_fp_pending_check(ir);                   \
         }                                                   \
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
@@ -874,7 +873,6 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
             uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);           \
             uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_fp_enter); \
             uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout); \
-            codegen_fp_pending_check(ir);                   \
         }                                                   \
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
@@ -901,10 +899,8 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
     } while (0)
 #define uop_FP_ENTER(ir)                                    \
     do {                                                    \
-        if (!codegen_fpu_entered) {                         \
+        if (!codegen_fpu_entered)                           \
             uop_gen_imm(UOP_FP_ENTER_ORDERED, ir, cpu_state.oldpc); \
-            codegen_fp_pending_check(ir);                   \
-        }                                                   \
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
     } while (0)
