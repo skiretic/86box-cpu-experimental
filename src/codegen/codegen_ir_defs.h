@@ -379,8 +379,11 @@
 /*UOP_FCMP_JWITHIN_DEST - if (src_reg_b < src_reg_a < src_reg_c), all ordered (a NaN
   anywhere fails), then jump to ptr*/
 #define UOP_FCMP_JWITHIN_DEST (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xce | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
+/*UOP_CMP_JNWITHIN - if (src_reg_a < src_reg_b || src_reg_a + imm > src_reg_c), unsigned,
+  then jump to ptr*/
+#define UOP_CMP_JNWITHIN (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_IMM | UOP_TYPE_PARAMS_POINTER | 0xcf | UOP_TYPE_ORDER_BARRIER)
 
-#define UOP_MAX     0xcf
+#define UOP_MAX     0xd0
 
 #define UOP_INVALID 0xff
 
@@ -745,6 +748,19 @@ uop_gen_reg_src2_pointer(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int sr
     uop->p         = p;
 }
 
+static inline void
+uop_gen_reg_src3_imm_pointer(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b, int src_reg_c, uint32_t imm, void *p)
+{
+    uop_t *uop = uop_alloc(ir, uop_type);
+
+    uop->type      = uop_type;
+    uop->src_reg_a = codegen_reg_read(src_reg_a);
+    uop->src_reg_b = codegen_reg_read(src_reg_b);
+    uop->src_reg_c = codegen_reg_read(src_reg_c);
+    uop->imm_data  = imm;
+    uop->p         = p;
+}
+
 extern int codegen_mmx_enter(void);
 extern int codegen_femms(void);
 extern int codegen_mmx_fpu_pending(void);
@@ -811,6 +827,7 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
 
 #define uop_CMP_JB(ir, src_reg_a, src_reg_b, p)                  uop_gen_reg_src2_pointer(UOP_CMP_JB, ir, src_reg_a, src_reg_b, p)
 #define uop_CMP_JNBE(ir, src_reg_a, src_reg_b, p)                uop_gen_reg_src2_pointer(UOP_CMP_JNBE, ir, src_reg_a, src_reg_b, p)
+#define uop_CMP_JNWITHIN(ir, src_reg, lo_reg, hi_reg, imm, p)    uop_gen_reg_src3_imm_pointer(UOP_CMP_JNWITHIN, ir, src_reg, lo_reg, hi_reg, imm, p)
 
 #define uop_FCMP_JWITHIN_DEST(ir, src_reg, lo_reg, hi_reg)      uop_gen_reg_src3(UOP_FCMP_JWITHIN_DEST, ir, src_reg, lo_reg, hi_reg)
 #define uop_CMP_JNB_DEST(ir, src_reg_a, src_reg_b)               uop_gen_reg_src2(UOP_CMP_JNB_DEST, ir, src_reg_a, src_reg_b)

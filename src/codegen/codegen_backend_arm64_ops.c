@@ -54,6 +54,7 @@
 #    define OPCODE_CBZ                (0xb4 << OPCODE_SHIFT)
 #    define OPCODE_CMN_IMM            (0x31 << OPCODE_SHIFT)
 #    define OPCODE_CMNX_IMM           (0xb1 << OPCODE_SHIFT)
+#    define OPCODE_CCMP_REG           (0x7a400000)
 #    define OPCODE_CMP_IMM            (0x71 << OPCODE_SHIFT)
 #    define OPCODE_CMPX_IMM           (0xf1 << OPCODE_SHIFT)
 #    define OPCODE_SUB_IMM            (0x51 << OPCODE_SHIFT)
@@ -954,6 +955,12 @@ void
 host_arm64_CMP_REG_LSL(codeblock_t *block, int src_n_reg, int src_m_reg, int shift)
 {
     codegen_addlong(block, OPCODE_CMP_LSL | Rd(0x1f) | Rn(src_n_reg) | Rm(src_m_reg) | DATPROC_SHIFT(shift));
+}
+/*CCMP: the flags of src_n_reg compared with src_m_reg when CS holds, else nzcv*/
+void
+host_arm64_CCMP_REG_CS(codeblock_t *block, int src_n_reg, int src_m_reg, int nzcv)
+{
+    codegen_addlong(block, OPCODE_CCMP_REG | CSEL_COND(COND_CS) | Rn(src_n_reg) | Rm(src_m_reg) | nzcv);
 }
 
 /*CSET dst_reg, cond: CSINC dst_reg, WZR, WZR with the opposite condition*/
