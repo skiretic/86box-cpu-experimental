@@ -667,6 +667,17 @@ host_arm64_branch_set_offset(uint32_t *opcode, void *dest)
             *cond_opcode = OPCODE_BCOND | (cond & 0xfu) | OFFSET19(offset19);
             *opcode      = OPCODE_NOP;
             return;
+        } else {
+            void *veneer = codegen_allocator_veneer(cond_src, dest);
+
+            if (veneer && codegen_allocator_can_branch_imm19(cond_src, veneer)) {
+                uint32_t cond     = (cond_insn & 0xf) ^ 1u;
+                int      offset19 = (int) ((uintptr_t) veneer - (uintptr_t) cond_opcode);
+
+                *cond_opcode = OPCODE_BCOND | (cond & 0xfu) | OFFSET19(offset19);
+                *opcode      = OPCODE_NOP;
+                return;
+            }
         }
     }
 
@@ -833,6 +844,18 @@ host_arm64_CBNZ(codeblock_t *block, int reg, uintptr_t dest)
         offset = (intptr_t) ((uint8_t *) dst_ptr - cbnz_src);
         codegen_addlong(block, OPCODE_CBNZ | OFFSET19(offset) | Rt(reg));
         return;
+    }
+    {
+        void *veneer = codegen_allocator_veneer(cbnz_src, dst_ptr);
+
+        if (veneer && codegen_allocator_can_branch_imm19(cbnz_src, veneer)) {
+            offset = (intptr_t) ((uint8_t *) veneer - cbnz_src);
+            codegen_addlong(block, OPCODE_CBNZ | OFFSET19(offset) | Rt(reg));
+            /*The size of the CBZ/B pair it replaces: blocks fill the code
+              memory, and run it out, as they do without veneers*/
+            codegen_addlong(block, OPCODE_NOP);
+            return;
+        }
     }
 
     if (codegen_allocator_can_branch_imm26(cbnz_src + 4, dst_ptr)) {

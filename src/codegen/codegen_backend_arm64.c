@@ -1330,6 +1330,12 @@ codegen_backend_init(void)
 
     codegen_allocator_clean_blocks(block->head_mem_block);
 
+    {
+        const void *veneer_targets[] = { codegen_exit_rout, codegen_gpf_rout, codegen_ss_rout };
+
+        codegen_allocator_set_veneers(veneer_targets, sizeof(veneer_targets) / sizeof(veneer_targets[0]));
+    }
+
     asm("mrs %0, fpcr\n"
         : "=r"(cpu_state.old_fp_control));
 }
