@@ -114,14 +114,9 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     uintptr_t            xlat_val = 0;
     codegen_link_slot_t *slot;
 
-    /*Only a compiled block the hash already points to, with no dirty-list
-      retry state the C loop would still have to clear.*/
+    /*Only a compiled block the hash already points to.*/
     if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
         return;
-#if defined(__aarch64__) || defined(_M_ARM64)
-    if (block->dirty_list_recompile_hits)
-        return;
-#endif
     if (codeblock_hash[HASH(phys)] != get_block_nr(block))
         return;
     if (cr0 >> 31) {
@@ -653,12 +648,6 @@ codegen_block_init(uint32_t phys_addr)
     block->pc          = cs + cpu_state.pc;
     block->_cs         = cs;
     block->phys        = phys_addr;
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__loongarch_lp64)
-    /* ARM64/LoongArch64 state initialization for delayed NO_IMMEDIATES policy. */
-    block->dirty_list_recompile_hits = 0;
-    /* Zero epoch so the first dirty-list hit starts a new burst. */
-    block->dirty_list_last_epoch     = 0;
-#endif
     block->dirty_mask  = &page->dirty_mask;
     block->dirty_mask2 = NULL;
     block->next = block->prev = BLOCK_INVALID;
