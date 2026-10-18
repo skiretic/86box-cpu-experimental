@@ -708,6 +708,11 @@ exec386_dynarec_dyn(void)
             codegen_link_block_changed(block);
 #        endif
         }
+        /* A block whose code was rewritten may be back to bytes it was
+           compiled from before: put that version back rather than compile
+           them again. */
+        if (valid_block && (block->flags & CODEBLOCK_IN_DIRTY_LIST) && (block->flags & CODEBLOCK_NO_IMMEDIATES))
+            codegen_block_restore_version(block);
     }
 
     if (valid_block && (block->flags & CODEBLOCK_WAS_RECOMPILED))
@@ -783,6 +788,7 @@ exec386_dynarec_dyn(void)
                 cpu_state.pc++;
 
                 codegen_generate_call(opcode, x86_opcodes[(opcode | cpu_state.op32) & 0x3ff], fetchdat, cpu_state.pc, cpu_state.pc - 1);
+                codegen_block_version_check_ins(cs + cpu_state.oldpc);
 
                 x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);
 
