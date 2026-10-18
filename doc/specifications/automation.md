@@ -58,9 +58,10 @@ startup), `frames` (frames rendered) and `held`.
 
 | Request | Effect |
 |---|---|
-| `status` | Protocol and emulator version, `ms`, `frames`, `held`, `paused` (UI pause), last frame size `w`/`h`, `bios_mode` (BIOS data area 0x449), `quantum_ms`. |
+| `status` | Protocol and emulator version, `ms`, `frames`, `held`, `paused` (UI pause), `ff` (fast forward), last frame size `w`/`h`, `bios_mode` (BIOS data area 0x449), `quantum_ms`. |
 | `hold` | Stop running the CPU between requests. |
 | `release` | Resume normal real-time execution. |
+| `ff [on\|off]` | Fast forward on or off, as the UI's (no pacing to real time when the machine runs); with no argument, what it is. Reply has `ff`. |
 | `step <ms>` | Run exactly `ms` of emulated time, then reply. If held, runs without real-time pacing (as fast as the host allows), then holds again. |
 | `wait text <timeout_ms> <text>` | Run until `<text>` (rest of line, matched against raw screen bytes) appears in a single row of the text screen, or until the timeout. Reply has `matched`. |
 | `wait mem <timeout_ms> <addr> <hex>` | Run until physical memory at `addr` equals the hex bytes, or until the timeout. |
@@ -76,6 +77,7 @@ startup), `frames` (frames rendered) and `held`.
 | `fdd load <drive> <path>` / `fdd eject <drive>` | Change floppy media (drive 0 = A:). |
 | `cd load <drive> <path>` / `cd eject <drive>` | Change CD-ROM media. |
 | `reset hard` / `reset cad` | Hard reset, or send Ctrl+Alt+Del. |
+| `quit soft` | Soft power-off, like the GUI "Power off (soft)" button. Machine must not be held. |
 | `quit` | Power off and exit 86Box. |
 
 Numbers accept C syntax (`0x` hex, decimal).
@@ -100,6 +102,26 @@ Over TCP, send the token first:
 $ 86Box --automation tcp:7086 --automation-token-file /tmp/86box.token &
 $ (echo "auth $(cat /tmp/86box.token)"; echo status) | socat - TCP:127.0.0.1:7086
 ```
+
+## When 86Box stops
+
+On a fatal error, 86Box writes the message to its log and closes the
+automation socket before it shows the error dialog, so a client sees its
+connection close rather than waiting for a reply.
+
+## With the GDB stub
+
+In a build with both `-D AUTOMATION=ON` and `-D GDBSTUB=ON`, a GDB client
+and an automation client can share a machine:
+
+- While the GDB stub has the CPU stopped (the stub starts it stopped, and a
+  breakpoint, a watchpoint or a GDB interrupt stops it), no emulated time
+  passes, and `ms` doesn't advance. A `step`, `wait` or `key` command ends
+  as soon as the CPU stops, with `"stopped":"debugger"` in its reply. A
+  `wait` that ends this way has `"matched":false`.
+- While the machine is held, the stub still answers GDB: registers, memory,
+  breakpoints and monitor commands work. A GDB `continue` or `step` takes
+  effect when the CPU next runs, for example during an automation `step`.
 
 ## Determinism notes
 
