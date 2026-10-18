@@ -45,6 +45,8 @@ jit_flags_rebuild_zpna(void)
 static inline void
 call_flags_rebuild(ir_data_t *ir, void (*rebuild)(void))
 {
+    if ((rebuild == jit_flags_rebuild) && codegen_flags_rebuild_known(ir, 0))
+        return;
 #if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
     uop_CALL_FUNC_ORDERED(ir, rebuild);
     uop_MOVZX_REG_PTR_16(ir, IREG_flags, &cpu_state.flags);
