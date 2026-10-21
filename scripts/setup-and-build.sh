@@ -115,7 +115,9 @@ cmd_build() {
             QT5_ROOT="$(brew --prefix qt@5)"
             OPENAL_ROOT="$(brew --prefix openal-soft)"
             LIBSERIALPORT_ROOT="$(brew --prefix libserialport)"
-            PLATFORM_ARGS=(--toolchain ./cmake/llvm-macos-aarch64.cmake)
+            # Qt 6 from Homebrew would shadow qt@5's headers: see qt5-first.cmake
+            PLATFORM_ARGS=(--toolchain ./cmake/llvm-macos-aarch64.cmake
+                           -D CMAKE_PROJECT_INCLUDE="$SCRIPT_DIR/qt5-first.cmake")
             MVK_CANDIDATE=/opt/homebrew/lib/libMoltenVK.dylib
             ;;
         x86_64)
@@ -148,6 +150,7 @@ cmd_build() {
         -D NEW_DYNAREC="$NEW_DYNAREC" \
         -D QT=ON \
         -D MOLTENVK=ON \
+        -D AUTOMATION=ON \
         -D Qt5_ROOT="$QT5_ROOT" \
         -D Qt5LinguistTools_ROOT="$QT5_ROOT" \
         -D OpenAL_ROOT="$OPENAL_ROOT" \
