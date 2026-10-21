@@ -432,6 +432,9 @@ msgstr "Genaue FPU-Umgebung für den dynamischen Recompiler"
 msgid "Block linking on the dynamic recompiler"
 msgstr "Block-Verkettung im dynamischen Recompiler"
 
+msgid "Debug registers on 486 and later processors"
+msgstr ""
+
 msgid "CPU frame size"
 msgstr "CPU-Framegröße"
 
@@ -623,6 +626,12 @@ msgstr "Controller 4:"
 
 msgid "Cassette"
 msgstr "Kassette"
+
+msgid "Turbo IDE"
+msgstr ""
+
+msgid "Removes the IDE transfer mode speed limit. Hard disk and CD-ROM drive timings still apply."
+msgstr ""
 
 msgid "Hard disks:"
 msgstr "Festplatten:"

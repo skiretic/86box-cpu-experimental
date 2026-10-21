@@ -434,6 +434,9 @@ msgstr "Ambiente FPU accurato con il ricompilatore dinamico"
 msgid "Block linking on the dynamic recompiler"
 msgstr "Collegamento dei blocchi con il ricompilatore dinamico"
 
+msgid "Debug registers on 486 and later processors"
+msgstr ""
+
 msgid "CPU frame size"
 msgstr "Dimensione blocchi CPU"
 
@@ -625,6 +628,12 @@ msgstr "Controller 4:"
 
 msgid "Cassette"
 msgstr "Cassetta"
+
+msgid "Turbo IDE"
+msgstr ""
+
+msgid "Removes the IDE transfer mode speed limit. Hard disk and CD-ROM drive timings still apply."
+msgstr ""
 
 msgid "Hard disks:"
 msgstr "Dischi rigidi:"

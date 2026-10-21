@@ -33,6 +33,8 @@ extern "C" {
 extern char automation_path[1024];       /* unix:<path>, tcp:[host:]port, or bare (see doc) */
 extern char automation_token_file[1024]; /* TCP: where the per-run token is written */
 extern int  automation_start_held;
+extern int  automation_seed_set;    /* --automation-seed given */
+extern uint32_t automation_seed;
 extern int  automation_allow_remote; /* TCP: permit a non-loopback bind address */
 extern int  automation_insecure;     /* TCP: accept clients without a token */
 
@@ -49,6 +51,15 @@ extern void automation_frame(int x, int y, int w, int h, int monitor_index);
 extern void automation_reset(int hard);
 /* Called by the sound core with every block of a stream (any thread). */
 extern void automation_audio(int src, const void *buf, int size, int is_float);
+/* For COM ports with the "automation" backend (char_automation.c), on the
+   CPU thread; port is 1 for COM1. The buffers outlive the backend, which a
+   hard reset closes and opens again. */
+extern void     automation_serial_attach(int port, int attached);
+extern void     automation_serial_out(int port, uint8_t val);
+/* byte_us: the time one character takes on the guest's line (0: not paced). */
+extern int      automation_serial_in(int port, uint8_t *val, double byte_us);
+extern uint32_t automation_serial_lines(int port);
+extern void     automation_serial_control(int port, uint32_t control);
 #else
 #    define automation_init()
 #    define automation_close()
