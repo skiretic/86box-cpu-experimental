@@ -672,6 +672,7 @@ smm_seg_load(x86seg *s)
             cpu_cur_status |= CPU_STATUS_NOTFLATSS;
         set_stack32((s->ar_high & 0x40) ? 1 : 0);
     }
+    cpu_set_wide_status(s);
 }
 
 static void
@@ -2007,10 +2008,10 @@ sysenter(UNUSED(uint32_t fetchdat))
     cpu_state.seg_ss.ar_high    = 0xcf;
     cpu_state.seg_ss.checked    = 1;
 #ifdef USE_DYNAREC
-    codegen_flat_ss = 0;
+    codegen_flat_ss = codegen_wide_ss = 0;
 #endif
 
-    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_V86);
+    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_NOTWIDESS | CPU_STATUS_V86);
     cpu_cur_status |= (CPU_STATUS_USE32 | CPU_STATUS_STACK32 /* | CPU_STATUS_PMODE*/);
     set_use32(1);
     set_stack32(1);
@@ -2091,10 +2092,10 @@ sysexit(UNUSED(uint32_t fetchdat))
     cpu_state.seg_ss.ar_high    = 0xcf;
     cpu_state.seg_ss.checked    = 1;
 #ifdef USE_DYNAREC
-    codegen_flat_ss = 0;
+    codegen_flat_ss = codegen_wide_ss = 0;
 #endif
 
-    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS /* | CPU_STATUS_V86*/);
+    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_NOTWIDESS /* | CPU_STATUS_V86*/);
     cpu_cur_status |= (CPU_STATUS_USE32 | CPU_STATUS_STACK32 | CPU_STATUS_PMODE);
     flushmmucache_nopc();
     set_use32(1);
@@ -2150,10 +2151,10 @@ syscall_op(UNUSED(uint32_t fetchdat))
     cpu_state.seg_ss.ar_high    = 0xcf;
     cpu_state.seg_ss.checked    = 1;
 #ifdef USE_DYNAREC
-    codegen_flat_ss = 0;
+    codegen_flat_ss = codegen_wide_ss = 0;
 #endif
 
-    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_V86);
+    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_NOTWIDESS | CPU_STATUS_V86);
     cpu_cur_status |= (CPU_STATUS_USE32 | CPU_STATUS_STACK32 | CPU_STATUS_PMODE);
     set_use32(1);
     set_stack32(1);
@@ -2208,10 +2209,10 @@ sysret(UNUSED(uint32_t fetchdat))
     cpu_state.seg_ss.ar_high    = 0xcf;
     cpu_state.seg_ss.checked    = 1;
 #ifdef USE_DYNAREC
-    codegen_flat_ss = 0;
+    codegen_flat_ss = codegen_wide_ss = 0;
 #endif
 
-    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS /* | CPU_STATUS_V86*/);
+    cpu_cur_status &= ~(CPU_STATUS_NOTFLATSS | CPU_STATUS_NOTWIDESS /* | CPU_STATUS_V86*/);
     cpu_cur_status |= (CPU_STATUS_USE32 | CPU_STATUS_STACK32 | CPU_STATUS_PMODE);
     flushmmucache_nopc();
     set_use32(1);
