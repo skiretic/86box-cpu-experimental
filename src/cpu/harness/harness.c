@@ -379,8 +379,15 @@ load_case(const harness_case_t *c, int with_code)
 
     /* PE, and NE so an unmasked x87 exception is #MF through the IDT.
        With NE clear it is FERR# and IRQ13, and with no PIC here the
-       waiting instruction would stall forever. */
-    cr0 |= 0x21;
+       waiting instruction would stall forever. CD and NW, set by reset,
+       cleared: the dynarec loop interprets every block while CD is set
+       and would never run compiled code. The cache flag and the wait
+       states follow CD as they do after a MOV CR0. */
+    cr0 = (cr0 & ~0x60000000) | 0x21;
+    cpu_cache_int_enabled = hascache && !(cr0 & (1 << 30));
+    if (hascache)
+        cpu_update_waitstates();
+    cpu_car_update();
     cr4 = 0;
     cr3 = 0;
 
