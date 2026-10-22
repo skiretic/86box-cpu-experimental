@@ -8,8 +8,10 @@
  *
  *          CPU test harness: runs a code blob from one snapshot of CPU
  *          and memory state under the interpreter, then under the
- *          recompiler's compile pass and its compiled code, and diffs
- *          the resulting state.
+ *          recompiler until a run compiles nothing (its mark pass, its
+ *          compile passes, the compiled code, and the compiled code again
+ *          with the links the first compiled run made), and diffs the
+ *          resulting state.
  *
  *          The guest is a flat 32-bit (or 16-bit) protected-mode
  *          environment built straight into RAM: a GDT, an IDT whose
@@ -21,10 +23,10 @@
  *
  *          Architectural state (registers, flags, segments, x87, MMX, the
  *          data page, the fault record) must agree between every run.
- *          The RDTSC delta must agree between the compile pass and the
- *          compiled code, which charge the same timing model; the
- *          interpreter charges per instruction and its delta is only
- *          reported.
+ *          The RDTSC delta must agree between the two compiled runs; the
+ *          interpreter, the mark pass and the compile passes charge the
+ *          interpreter's per-instruction cycles for what they interpret,
+ *          and their deltas are only reported.
  */
 #include <inttypes.h>
 #include <pthread.h>
@@ -90,7 +92,12 @@ typedef struct harness_state_t {
     uint8_t  data[HARNESS_PAGE];
 } harness_state_t;
 
-static const char *run_names[] = { "interpreter", "compile pass", "compiled", "compiled 2" };
+/* The recompiler marks a block on its first visit (interpreted), compiles
+   it on the second (interpreted while the code is generated) and runs the
+   compiled code from the third. Run names: "interpreter", "mark pass",
+   "compile pass" (numbered from the second), "compiled", "compiled 2". */
+#define MAX_RUNS 64
+static char run_name[MAX_RUNS + 1][24];
 
 /* Slice sizes: the recompiler loop splits its argument into 200 periods
    and needs each to be at least a cycle. */
@@ -671,21 +678,47 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
 
 /* ---- a case ---------------------------------------------------------- */
 
-static int passes = 3;
+static int passes = MAX_RUNS;
 static int dump   = 0;
 static int quiet  = 0;
 static int truncate_to = -1; /* cut a generated body to this many bytes */
+
+/* The recompiler's blocks on one page as a signature: the block numbers,
+   start addresses, lengths and whether each holds compiled code. A run that
+   marked, compiled or dropped a block changes it. */
+static uint64_t
+page_blocks_sig(uint32_t phys, uint64_t sig)
+{
+    uint32_t nr = pages[phys >> 12].block;
+
+    while (nr) {
+        const codeblock_t *b = &codeblock[nr];
+
+        sig = (sig ^ nr) * 0x100000001b3ULL;
+        sig = (sig ^ b->pc) * 0x100000001b3ULL;
+        sig = (sig ^ (uint32_t) b->ins) * 0x100000001b3ULL;
+        sig = (sig ^ (b->flags & CODEBLOCK_WAS_RECOMPILED)) * 0x100000001b3ULL;
+        nr  = b->next;
+    }
+    return sig;
+}
+
+static uint64_t
+blocks_sig(void)
+{
+    return page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
+}
 
 /* Returns 0 when every run agrees, else a bit set: 1 state, 2 timing. */
 static int
 run_case(const harness_case_t *c)
 {
-    harness_state_t st[4];
-    int             nruns = 1 + passes;
-    int             result = 0;
+    static harness_state_t st[MAX_RUNS + 1];
+    int                    nruns;
+    int                    compiled  = 0; /* the first run that changed no block */
+    int                    converged = 0;
+    int                    result    = 0;
 
-    if (nruns > 4)
-        nruns = 4;
     cur_case = c;
     build_code(c);
     if (harness_verbose) {
@@ -698,25 +731,49 @@ run_case(const harness_case_t *c)
     step("codegen_reset");
     codegen_reset();
 
-    step(run_names[0]);
+    strcpy(run_name[0], "interpreter");
+    step(run_name[0]);
     load_case(c, 1);
     step("run interpreter");
     st[0].status = run_until_halt(0);
     capture(&st[0], st[0].status);
 
-    for (int r = 1; r < nruns; r++) {
-        step(run_names[r]);
-        load_case(c, r == 1);
+    /* Recompiler runs until one changes no block: a straight-line body
+       compiles one more block per run, as each block is marked on the run
+       after the one before it was compiled. That run ran compiled code
+       only; one more runs it again, with the links the first one made. */
+    for (nruns = 1; nruns <= passes; nruns++) {
+        uint64_t before = blocks_sig();
+
+        if (nruns == 1)
+            strcpy(run_name[nruns], "mark pass");
+        else if (!compiled)
+            snprintf(run_name[nruns], sizeof(run_name[nruns]), nruns == 2 ? "compile pass" : "compile pass %d", nruns - 1);
+        else
+            strcpy(run_name[nruns], "compiled 2");
+        step(run_name[nruns]);
+        load_case(c, nruns == 1);
         step("run recompiler");
-        st[r].status = run_until_halt(1);
-        capture(&st[r], st[r].status);
+        st[nruns].status = run_until_halt(1);
+        capture(&st[nruns], st[nruns].status);
+        if (compiled) {
+            nruns++;
+            converged = 1;
+            break;
+        }
+        if (nruns > 1 && blocks_sig() == before) {
+            compiled = nruns;
+            strcpy(run_name[nruns], "compiled");
+        }
     }
     step("report");
 
     if (quiet) {
-        int bad = 0;
+        int bad = !converged;
         for (int r = 1; r < nruns && !bad; r++)
-            bad = compare_silent(&st[0], &st[r]) || (r >= 2 && st[r].tsc_delta != st[1].tsc_delta);
+            bad = compare_silent(&st[0], &st[r]);
+        if (!bad && st[compiled + 1].tsc_delta != st[compiled].tsc_delta)
+            bad = 1;
         if (!bad) {
             cur_case = NULL;
             return 0;
@@ -726,15 +783,16 @@ run_case(const harness_case_t *c)
     printf("%s: ", c->label);
     for (int r = 1; r < nruns; r++) {
         if (compare(&st[0], &st[r])) {
-            printf("\n  STATE %s != %s (%d fields)\n", run_names[0], run_names[r], diff_lines);
+            printf("\n  STATE %s != %s (%d fields)\n", run_name[0], run_name[r], diff_lines);
             result |= 1;
         }
     }
-    for (int r = 2; r < nruns; r++) {
-        if (st[r].tsc_delta != st[1].tsc_delta) {
-            printf("\n  TIMING %s %" PRIu64 " != %s %" PRIu64 "\n", run_names[1], st[1].tsc_delta, run_names[r], st[r].tsc_delta);
-            result |= 2;
-        }
+    if (!converged) {
+        printf("\n  NOT CONVERGED within %d recompiler runs\n", nruns - 1);
+        result |= 2;
+    } else if (st[compiled + 1].tsc_delta != st[compiled].tsc_delta) {
+        printf("\n  TIMING %s %" PRIu64 " != %s %" PRIu64 "\n", run_name[compiled], st[compiled].tsc_delta, run_name[compiled + 1], st[compiled + 1].tsc_delta);
+        result |= 2;
     }
     if (!result)
         printf("ok (%s", status_names[st[0].status]);
@@ -742,11 +800,14 @@ run_case(const harness_case_t *c)
         printf("  summary: (%s", status_names[st[0].status]);
     if (st[0].vector != 0xffffffff)
         printf(", fault %02x", st[0].vector);
-    printf("; cycles interpreter %" PRIu64 ", recompiler %" PRIu64 ")\n", st[0].tsc_delta, st[1].tsc_delta);
+    printf("; cycles interpreter %" PRIu64, st[0].tsc_delta);
+    if (converged)
+        printf(", %s %" PRIu64 ", compiled %" PRIu64, run_name[compiled - 1], st[compiled - 1].tsc_delta, st[compiled].tsc_delta);
+    printf(")\n");
 
     if (result || dump) {
         for (int r = 0; r < nruns; r++) {
-            printf("  %s:\n", run_names[r]);
+            printf("  %s:\n", run_name[r]);
             dump_state(&st[r]);
         }
         dump_case_hex(c);
@@ -806,12 +867,13 @@ usage(void)
             "  --fast-fpu-env       accurate FPU environment off: compiled x87 code leaves the\n"
             "                       FNSTENV/FNSAVE pointer words stale, so those cases differ\n"
             "  --nolink             block linking off\n"
-            "  --passes <n>         recompiler passes after the interpreter run (1-3, default 3)\n"
+            "  --passes <n>         at most n recompiler runs after the interpreter run (default %d:\n"
+            "                       mark pass, compile passes until one compiles nothing, compiled 2)\n"
             "  --dump               print every run's final state\n"
             "  --quiet              print only the cases with differences, and the total\n"
             "  --truncate <n>       cut each generated body to n bytes (bisecting a case)\n"
             "  --verbose            core log lines to stderr\n",
-            harness_gen_class_names());
+            harness_gen_class_names(), MAX_RUNS);
 }
 
 int
@@ -872,8 +934,8 @@ main(int argc, char **argv)
             nolink = 1;
         } else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
             passes = atoi(argv[++i]);
-            if (passes < 1 || passes > 3) {
-                fprintf(stderr, "passes must be 1..3\n");
+            if (passes < 1 || passes > MAX_RUNS) {
+                fprintf(stderr, "passes must be 1..%d\n", MAX_RUNS);
                 return 2;
             }
         } else if (!strcmp(argv[i], "--dump")) {
