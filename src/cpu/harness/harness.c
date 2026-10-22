@@ -418,6 +418,18 @@ load_case(const harness_case_t *c, int with_code)
     fpu_ignne = 0;
     new_ne    = 0;
     x87_op    = 0;
+    /* The last x87 instruction's pointers, what FNSTENV and FNSAVE store:
+       a fresh FPU has none. */
+    cpu_state.fpu_cs = 0;
+    cpu_state.fpu_CS = 0;
+    cpu_state.fpu_pc = 0;
+    cpu_state.fpu_op = 0;
+    cpu_state.fpu_DS = 0;
+    cpu_state.fpu_ds = 0;
+    cpu_state.fpu_ea = 0;
+    cpu_state.temp_cs = 0;
+    cpu_state.temp_CS = 0;
+    cpu_state.temp_pc = 0;
 }
 
 static void
