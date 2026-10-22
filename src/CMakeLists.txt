@@ -345,3 +345,7 @@ if(AUTOMATION)
     endif()
     target_link_libraries(86Box zstd::zstd)
 endif()
+
+if(CPU_HARNESS AND DYNAREC)
+    add_subdirectory(cpu/harness)
+endif()

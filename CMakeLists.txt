@@ -126,6 +126,7 @@ option(VNC          "VNC renderer"                                              
 option(MINITRACE    "Enable Chrome tracing using the modified minitrace library" OFF)
 option(GDBSTUB      "Enable GDB stub server for debugging"                       OFF)
 option(AUTOMATION   "Enable the automation control socket"                       OFF)
+option(CPU_HARNESS  "Build the CPU test harness (recompiler against interpreter)" OFF)
 option(DEV_BRANCH   "Development branch"                                         OFF)
 option(DISCORD      "Discord Rich Presence support"                              ON)
 option(LIBASAN      "Enable compilation with the addresss sanitizer"             OFF)
