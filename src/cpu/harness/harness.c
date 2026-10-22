@@ -84,6 +84,9 @@ typedef struct harness_state_t {
     uint32_t vector;
     uint32_t tos;
     uint64_t tsc_delta;
+    uint32_t stray_pages; /* pages written outside the ones the case owns */
+    uint32_t stray_first; /* the lowest of them */
+    uint64_t stray_hash;  /* over their addresses and contents */
     uint8_t  data[HARNESS_PAGE];
 } harness_state_t;
 
@@ -156,10 +159,12 @@ build_tables(void)
     /* GDT: null, flat 32-bit code and data, flat 16-bit code and data
        (same 4 GB limit, D/B clear). */
     memset(ram + HARNESS_GDT, 0, 8);
-    gdt_entry(SEL_CODE32, 0x9a, 0xc0);
-    gdt_entry(SEL_DATA32, 0x92, 0xc0);
-    gdt_entry(SEL_CODE16, 0x9a, 0x80);
-    gdt_entry(SEL_DATA16, 0x92, 0x80);
+    /* Accessed bits set: a load of a descriptor without it writes the
+       table, and the GDT page would count as a store the case made. */
+    gdt_entry(SEL_CODE32, 0x9b, 0xc0);
+    gdt_entry(SEL_DATA32, 0x93, 0xc0);
+    gdt_entry(SEL_CODE16, 0x9b, 0x80);
+    gdt_entry(SEL_DATA16, 0x93, 0x80);
 
     /* IDT: every vector a 32-bit interrupt gate into the flat code segment,
        each to its own handler. */
@@ -260,6 +265,8 @@ emit_epilogue(uint8_t *p, int mode16)
 
 /* ---- machine --------------------------------------------------------- */
 
+static uint8_t *ram_ref; /* RAM as set up, before any case ran */
+
 static void
 step(const char *what)
 {
@@ -320,6 +327,12 @@ setup_machine(int softfloat)
 
     step("tables");
     build_tables();
+
+    /* The reference every page the cases do not own is held to. */
+    ram_ref = malloc(mem_size * 1024);
+    if (ram_ref == NULL)
+        harness_fatal("no memory for the RAM reference");
+    memcpy(ram_ref, ram, mem_size * 1024);
 }
 
 /* ---- case state ------------------------------------------------------ */
@@ -349,7 +362,7 @@ load_case(const harness_case_t *c, int with_code)
         memcpy(ram + HARNESS_CODE, code_image, HARNESS_PAGE);
     memcpy(ram + HARNESS_DATA, c->data, HARNESS_PAGE);
     memset(ram + HARNESS_STACK, 0, HARNESS_PAGE);
-    memset(ram + HARNESS_RECORD, 0, 0x40);
+    memset(ram + HARNESS_RECORD, 0, HARNESS_PAGE);
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
 
     cpu_state.abrt = 0;
@@ -432,6 +445,42 @@ load_case(const harness_case_t *c, int with_code)
     cpu_state.temp_pc = 0;
 }
 
+/* The pages a case owns: load_case() reloads them, and they are compared
+   through the state (data, record) or read by the CPU itself (code). */
+static int
+case_owns_page(uint32_t addr)
+{
+    return addr == HARNESS_RECORD || addr == HARNESS_STACK || addr == HARNESS_DATA || addr == HARNESS_CODE;
+}
+
+/* Every other page must still match the reference taken after setup. One
+   that does not holds a store the case made outside its data page: it is
+   counted and hashed into the state, so the runs are compared on it too,
+   and put back, so the store cannot reach the next run. The page is marked
+   dirty as a CPU write would: the case may have run code from it, and a
+   block compiled from the bytes the memcpy replaces has to go. */
+static void
+capture_stray_pages(harness_state_t *s)
+{
+    uint32_t end = mem_size * 1024;
+
+    s->stray_pages = 0;
+    s->stray_first = 0;
+    s->stray_hash  = 0xcbf29ce484222325ull;
+    for (uint32_t a = 0; a < end; a += HARNESS_PAGE) {
+        if (case_owns_page(a) || !memcmp(ram + a, ram_ref + a, HARNESS_PAGE))
+            continue;
+        if (!s->stray_pages)
+            s->stray_first = a;
+        s->stray_pages++;
+        s->stray_hash = (s->stray_hash ^ a) * 0x100000001b3ull;
+        for (int i = 0; i < HARNESS_PAGE; i++)
+            s->stray_hash = (s->stray_hash ^ ram[a + i]) * 0x100000001b3ull;
+        memcpy(ram + a, ram_ref + a, HARNESS_PAGE);
+        mem_invalidate_range(a, a);
+    }
+}
+
 static void
 capture(harness_state_t *s, int status)
 {
@@ -465,6 +514,7 @@ capture(harness_state_t *s, int status)
     s->tos       = get32(HARNESS_RECORD + REC_TOS);
     s->tsc_delta = get32(HARNESS_RECORD + REC_TSC_DELTA) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_DELTA + 4) << 32);
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
+    capture_stray_pages(s);
 }
 
 static int
@@ -572,6 +622,10 @@ compare(const harness_state_t *a, const harness_state_t *b)
             diff(name, a->data[i], b->data[i]);
         }
     }
+    if (a->stray_pages != b->stray_pages)
+        diff("ram.pages", a->stray_pages, b->stray_pages);
+    else if (a->stray_hash != b->stray_hash)
+        diff("ram.hash", a->stray_hash, b->stray_hash);
     return diff_lines;
 }
 
@@ -588,6 +642,8 @@ dump_state(const harness_state_t *s)
         memcpy(&d, &s->st[i], 8);
         printf("    ST[%d]=%016" PRIx64 " (%.17g)  MM%d=%016" PRIx64 "\n", i, s->st[i], d, i, s->mm[i]);
     }
+    if (s->stray_pages)
+        printf("    stores outside the data page: %u page(s), first at %08x, hash %016" PRIx64 "\n", s->stray_pages, s->stray_first, s->stray_hash);
 }
 
 /* Same test as compare(), without the printing. */
@@ -599,7 +655,7 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->pc != b->pc || a->cr0_val != b->cr0_val || a->abrt != b->abrt || a->npxc != b->npxc || a->npxs != b->npxs
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
         || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
-        || memcmp(a->data, b->data, sizeof(a->data));
+        || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash;
 }
 
 /* ---- a case ---------------------------------------------------------- */
