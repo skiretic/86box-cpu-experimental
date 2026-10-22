@@ -2852,6 +2852,22 @@ cpu_ven_reset(void)
     }
 }
 
+/* A read of the TSC through an MSR counts the compiled block's cycles so
+   far, as RDTSC does: they reach the counter only through update_tsc().
+   A due timer run there can reset the CPU; the registers then hold the
+   reset state and the read returns nothing (nonzero). */
+static int
+tsc_msr_sync(void)
+{
+#ifdef USE_DYNAREC
+    if (cpu_use_dynarec) {
+        update_tsc();
+        return x86_was_reset;
+    }
+#endif
+    return 0;
+}
+
 void
 cpu_RDMSR(void)
 {
@@ -2908,6 +2924,8 @@ cpu_RDMSR(void)
                     break;
                 /* Time Stamp Counter */
                 case 0x10:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
@@ -2962,6 +2980,8 @@ cpu_RDMSR(void)
                     break;
                 /* Time Stamp Counter */
                 case 0x10:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
@@ -2994,6 +3014,8 @@ cpu_RDMSR(void)
                     break;
                 /* PERFCTR0 - Performance Counter Register 0 - aliased to TSC */
                 case 0xc1:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = (tsc >> 32) & 0xff;
                     break;
@@ -3096,6 +3118,8 @@ cpu_RDMSR(void)
                     break;
                 /* Time Stamp Counter */
                 case 0x00000010:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
@@ -3281,6 +3305,8 @@ amd_k_invalid_rdmsr:
                 /* Time Stamp Counter */
                 case 0x00000010:
                 case 0x80000010:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
@@ -3378,6 +3404,8 @@ pentium_invalid_rdmsr:
                     break;
                 /* Time Stamp Counter */
                 case 0x10:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
@@ -3413,6 +3441,8 @@ pentium_invalid_rdmsr:
                     break;
                 /* Time Stamp Counter */
                 case 0x10:
+                    if (tsc_msr_sync())
+                        break;
                     EAX = tsc & 0xffffffff;
                     EDX = tsc >> 32;
                     break;
