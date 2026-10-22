@@ -374,6 +374,11 @@ load_case(const harness_case_t *c, int with_code)
     memcpy(ram + HARNESS_DATA, c->data, HARNESS_PAGE);
     memset(ram + HARNESS_STACK, 0, HARNESS_PAGE);
     memset(ram + HARNESS_RECORD, 0, HARNESS_PAGE);
+    /* Put back without the CPU writing them: a block compiled from code a
+       run wrote there would otherwise survive the reload. */
+    mem_invalidate_range(HARNESS_DATA, HARNESS_DATA);
+    mem_invalidate_range(HARNESS_STACK, HARNESS_STACK);
+    mem_invalidate_range(HARNESS_RECORD, HARNESS_RECORD);
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
 
     cpu_state.abrt = 0;
