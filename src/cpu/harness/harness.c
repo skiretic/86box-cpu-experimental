@@ -546,6 +546,10 @@ run_until_halt(int dyn)
     int slices = 0;
 
     cpu_use_dynarec = dyn;
+    /* The read and write lookup tables charge cycles as they fill and would
+       otherwise carry over from the previous run or case: every run starts
+       with them empty and pays the same fills. */
+    flushmmucache();
     for (;;) {
         cpu_halted   = 0;
         timer_target = tsc + 1000000; /* no timer is ever due */
