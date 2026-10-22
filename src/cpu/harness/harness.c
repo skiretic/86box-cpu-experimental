@@ -276,7 +276,7 @@ step(const char *what)
 }
 
 static void
-setup_machine(int softfloat)
+setup_machine(int softfloat, int fast_fpu_env)
 {
     const CPU *cpus;
     int        n;
@@ -300,6 +300,10 @@ setup_machine(int softfloat)
     fpu_type        = FPU_INTERNAL;
     fpu_softfloat   = softfloat;
     cpu_use_dynarec = 1;
+    /* The interpreter always records the x87 instruction and data pointers;
+       the recompiler only does so under the accurate FPU environment option,
+       so the comparison runs with it on unless the fast mode is under test. */
+    cpu_dyn_accurate_fpu_env = !fast_fpu_env;
 
     step("mem_init");
     mem_init();
@@ -799,6 +803,8 @@ usage(void)
             "  --class <list>       generator classes, comma separated (%s), default all\n"
             "  --mode16             16-bit code and stack segments\n"
             "  --softfloat          softfloat FPU (the compiled x87 tables are bypassed)\n"
+            "  --fast-fpu-env       accurate FPU environment off: compiled x87 code leaves the\n"
+            "                       FNSTENV/FNSAVE pointer words stale, so those cases differ\n"
             "  --nolink             block linking off\n"
             "  --passes <n>         recompiler passes after the interpreter run (1-3, default 3)\n"
             "  --dump               print every run's final state\n"
@@ -817,6 +823,7 @@ main(int argc, char **argv)
     int             have_body  = 0;
     int             mode16     = 0;
     int             softfloat  = 0;
+    int             fast_fpu_env = 0;
     int             nolink     = 0;
     uint32_t        classes    = GEN_ALL;
     int             failures   = 0;
@@ -859,6 +866,8 @@ main(int argc, char **argv)
             mode16 = 1;
         } else if (!strcmp(argv[i], "--softfloat")) {
             softfloat = 1;
+        } else if (!strcmp(argv[i], "--fast-fpu-env")) {
+            fast_fpu_env = 1;
         } else if (!strcmp(argv[i], "--nolink")) {
             nolink = 1;
         } else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
@@ -885,7 +894,7 @@ main(int argc, char **argv)
         return 2;
     }
 
-    setup_machine(softfloat);
+    setup_machine(softfloat, fast_fpu_env);
     if (nolink)
         cpu_dyn_block_link = 0;
 
