@@ -56,6 +56,7 @@ typedef struct harness_case_t {
     double   st[8];
     uint64_t mm[8];
     int      mode16; /* 16-bit code and stack segments */
+    int      generated; /* from the generator: a store to the code page is its defect */
     uint8_t  data[HARNESS_PAGE];
     uint8_t  body[HARNESS_BODY_MAX];
     int      body_len;

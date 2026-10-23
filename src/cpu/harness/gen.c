@@ -427,12 +427,32 @@ gen_flags(emit_t *e, uint32_t classes)
             }
             break;
         case 5: /* bt / bts / btr / btc */
-            e8(e, 0x0f);
             if (chance(50)) {
                 static const uint8_t ops[4] = { 0xa3, 0xab, 0xb3, 0xbb };
-                e8(e, ops[rnd_below(4)]);
-                modrm_rm(e, src_reg(), chance(50), dest_reg(e));
+                int op  = ops[rnd_below(4)];
+                int reg = src_reg();
+                int mem = chance(50);
+                int rm  = dest_reg(e);
+
+                if (mem) {
+                    /* The register's bit offset moves the operand by
+                       4 * (offset >> 5) or 2 * (offset >> 4) bytes, signed:
+                       -0x400..0xbff keeps it in the data page for every
+                       [ebx+disp8]. The word form ignores the upper half. */
+                    int      w16 = chance(33);
+                    uint32_t off = rnd_below(0x1000) - 0x400;
+
+                    reg = dest_reg(e);
+                    e8(e, 0xb8 + reg); /* mov reg, imm32 */
+                    e32(e, w16 ? ((rnd() << 16) | (off & 0xffff)) : off);
+                    if (w16)
+                        e8(e, 0x66);
+                }
+                e8(e, 0x0f);
+                e8(e, op);
+                modrm_rm(e, reg, mem, rm);
             } else {
+                e8(e, 0x0f);
                 e8(e, 0xba);
                 modrm_rm(e, 4 + rnd_below(4), chance(50), dest_reg(e));
                 e8(e, rnd());
@@ -903,6 +923,7 @@ harness_gen_case(harness_case_t *c, uint64_t seed, uint32_t classes)
     char  *l;
 
     memset(c, 0, sizeof(*c));
+    c->generated = 1;
     rng = seed * 0x9e3779b97f4a7c15ULL + 0x2545f4914f6cdd1dULL;
     for (int i = 0; i < 8; i++)
         rnd();

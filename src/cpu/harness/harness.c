@@ -89,6 +89,9 @@ typedef struct harness_state_t {
     uint32_t stray_pages; /* pages written outside the ones the case owns */
     uint32_t stray_first; /* the lowest of them */
     uint64_t stray_hash;  /* over their addresses and contents */
+    uint32_t code_bytes;  /* code page bytes the run left changed */
+    uint32_t code_first;  /* the lowest of them */
+    uint64_t code_hash;   /* over the code page as the run left it */
     uint8_t  data[HARNESS_PAGE];
 } harness_state_t;
 
@@ -504,6 +507,32 @@ capture_stray_pages(harness_state_t *s)
     }
 }
 
+/* The code page is not reloaded between the recompiler runs, so that their
+   blocks survive. A byte a run changed there is hashed into the state and
+   written back as a CPU write would write it, so the recompiler's dirty
+   tracking drops the blocks over it and a reload of the page is not needed. */
+static void
+capture_code_page(harness_state_t *s)
+{
+    s->code_bytes = 0;
+    s->code_first = 0;
+    s->code_hash  = 0xcbf29ce484222325ull;
+    if (!memcmp(ram + HARNESS_CODE, code_image, HARNESS_PAGE))
+        return;
+    for (int i = 0; i < HARNESS_PAGE; i++)
+        s->code_hash = (s->code_hash ^ ram[HARNESS_CODE + i]) * 0x100000001b3ull;
+    for (int i = 0; i < HARNESS_PAGE; i++) {
+        uint32_t a = HARNESS_CODE + i;
+
+        if (ram[a] == code_image[i])
+            continue;
+        if (!s->code_bytes)
+            s->code_first = a;
+        s->code_bytes++;
+        mem_write_ramb_page(a, code_image[i], &pages[a >> 12]);
+    }
+}
+
 static void
 capture(harness_state_t *s, int status)
 {
@@ -538,6 +567,7 @@ capture(harness_state_t *s, int status)
     s->tsc_delta = get32(HARNESS_RECORD + REC_TSC_DELTA) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_DELTA + 4) << 32);
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
     capture_stray_pages(s);
+    capture_code_page(s);
 }
 
 static int
@@ -653,6 +683,10 @@ compare(const harness_state_t *a, const harness_state_t *b)
         diff("ram.pages", a->stray_pages, b->stray_pages);
     else if (a->stray_hash != b->stray_hash)
         diff("ram.hash", a->stray_hash, b->stray_hash);
+    if (a->code_bytes != b->code_bytes)
+        diff("code.bytes", a->code_bytes, b->code_bytes);
+    else if (a->code_hash != b->code_hash)
+        diff("code.hash", a->code_hash, b->code_hash);
     return diff_lines;
 }
 
@@ -671,6 +705,8 @@ dump_state(const harness_state_t *s)
     }
     if (s->stray_pages)
         printf("    stores outside the data page: %u page(s), first at %08x, hash %016" PRIx64 "\n", s->stray_pages, s->stray_first, s->stray_hash);
+    if (s->code_bytes)
+        printf("    stores to the code page: %u byte(s), first at %08x, hash %016" PRIx64 "\n", s->code_bytes, s->code_first, s->code_hash);
 }
 
 /* Same test as compare(), without the printing. */
@@ -682,7 +718,8 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->pc != b->pc || a->cr0_val != b->cr0_val || a->abrt != b->abrt || a->npxc != b->npxc || a->npxs != b->npxs
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
         || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
-        || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash;
+        || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash
+        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash;
 }
 
 /* ---- a case ---------------------------------------------------------- */
@@ -718,7 +755,8 @@ blocks_sig(void)
     return page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
 }
 
-/* Returns 0 when every run agrees, else a bit set: 1 state, 2 timing. */
+/* Returns 0 when every run agrees, else a bit set: 1 state, 2 timing, 4 a
+   generated body wrote its code page. */
 static int
 run_case(const harness_case_t *c)
 {
@@ -726,6 +764,7 @@ run_case(const harness_case_t *c)
     int                    nruns;
     int                    compiled  = 0; /* the first run that changed no block */
     int                    converged = 0;
+    int                    wrote_code = 0; /* 1 + the first run that changed the code page */
     int                    result    = 0;
 
     cur_case = c;
@@ -777,8 +816,14 @@ run_case(const harness_case_t *c)
     }
     step("report");
 
+    /* A hand body may write its code on purpose; a generated one must not. */
+    for (int r = 0; r < nruns && c->generated && !wrote_code; r++) {
+        if (st[r].code_bytes)
+            wrote_code = r + 1;
+    }
+
     if (quiet) {
-        int bad = !converged;
+        int bad = !converged || wrote_code;
         for (int r = 1; r < nruns && !bad; r++)
             bad = compare_silent(&st[0], &st[r]);
         if (!bad && st[compiled + 1].tsc_delta != st[compiled].tsc_delta)
@@ -802,6 +847,11 @@ run_case(const harness_case_t *c)
     } else if (st[compiled + 1].tsc_delta != st[compiled].tsc_delta) {
         printf("\n  TIMING %s %" PRIu64 " != %s %" PRIu64 "\n", run_name[compiled], st[compiled].tsc_delta, run_name[compiled + 1], st[compiled + 1].tsc_delta);
         result |= 2;
+    }
+    if (wrote_code) {
+        printf("\n  WRITES ITS CODE PAGE in %s: %u byte(s), first at %08x\n", run_name[wrote_code - 1],
+               st[wrote_code - 1].code_bytes, st[wrote_code - 1].code_first);
+        result |= 4;
     }
     if (!result)
         printf("ok (%s", status_names[st[0].status]);
@@ -898,7 +948,9 @@ main(int argc, char **argv)
     int             nolink     = 0;
     uint32_t        classes    = GEN_ALL;
     int             failures   = 0;
+    int             code_writers = 0;
     int             total      = 0;
+    int             r;
 
     default_case(c);
     for (int i = 1; i < argc; i++) {
@@ -972,8 +1024,9 @@ main(int argc, char **argv)
     if (have_body) {
         c->mode16 = mode16;
         total++;
-        if (run_case(c))
-            failures++;
+        r = run_case(c);
+        failures += !!(r & 3);
+        code_writers += !!(r & 4);
     }
     if (have_seeds) {
         for (uint64_t s = seed_a; s <= seed_b; s++) {
@@ -982,12 +1035,13 @@ main(int argc, char **argv)
             if (truncate_to >= 0 && truncate_to < c->body_len)
                 c->body_len = truncate_to;
             total++;
-            if (run_case(c))
-                failures++;
+            r = run_case(c);
+            failures += !!(r & 3);
+            code_writers += !!(r & 4);
         }
     }
 
-    printf("%d case%s, %d with differences\n", total, total == 1 ? "" : "s", failures);
+    printf("%d case%s, %d with differences, %d write their code page\n", total, total == 1 ? "" : "s", failures, code_writers);
     free(c);
-    return failures ? 1 : 0;
+    return (failures || code_writers) ? 1 : 0;
 }
