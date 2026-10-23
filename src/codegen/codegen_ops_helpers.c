@@ -10,6 +10,7 @@
 #include "x86seg.h"
 #include "386_common.h"
 #include "codegen.h"
+#include "codegen_accumulate.h"
 #include "codegen_ir.h"
 #include "codegen_ir_defs.h"
 #include "codegen_reg.h"
@@ -322,4 +323,18 @@ codegen_can_unroll_full(codeblock_t *block, ir_data_t *ir, UNUSED(uint32_t next_
     codegen_ir_set_unroll(max_unroll, start, first_instruction);
 
     return 1;
+}
+
+/*#UD, before any operand access, as the interpreter raises it: x86illegal
+  delivers it at once from oldpc (no abrt), so the compile pass keeps the
+  block and ends it with this instruction, and the block's own end follows,
+  linked to the handler's CS:EIP*/
+uint32_t
+codegen_ud(ir_data_t *ir)
+{
+    codegen_accumulate_flush(ir);
+    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    uop_CALL_FUNC(ir, x86illegal);
+
+    return -1;
 }
