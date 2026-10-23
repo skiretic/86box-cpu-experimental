@@ -820,19 +820,24 @@ shift_common_variable_8(ir_data_t *ir, uint32_t fetchdat, uint32_t op_pc, x86seg
     codegen_flags_changed = 1;
     return op_pc + 1;
 }
+
+/*The shifts by CL take the count as the block runs, as shift_imm_ram does: a
+  count of 0 skips the shift to a join behind a barrier, so the operand, the
+  flags and the deferred flags state stay as they are, and what follows can't
+  assume either flags state. The operand is read before the test, as the
+  interpreter reads it before it tests the count. Leaving the block instead
+  costs a dispatch through the loop on every zero count, and a site that
+  shifts by 0 most of the time is common*/
 uint32_t
 ropD2(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
 {
     x86seg *target_seg = NULL;
+    int     jump_uop;
 
     if ((fetchdat & 0x30) == 0x10) /*RCL/RCR*/
         return 0;
 
-    if (!(CL & 0x1f) || !block->ins)
-        return 0;
-
     uop_AND_IMM(ir, IREG_temp2, REG_ECX, 0x1f);
-    uop_CMP_IMM_JZ(ir, IREG_temp2, 0, codegen_exit_rout);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
     if ((fetchdat & 0xc0) != 0xc0) {
@@ -842,8 +847,13 @@ ropD2(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchd
         CHECK_SEG_LIMITS(block, ir, target_seg, IREG_eaaddr, 0);
         uop_MEM_LOAD_REG(ir, IREG_temp0_B, ireg_seg_base(target_seg), IREG_eaaddr);
     }
+    jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp2, 0);
 
-    return shift_common_variable_8(ir, fetchdat, op_pc, target_seg, IREG_temp2);
+    op_pc = shift_common_variable_8(ir, fetchdat, op_pc, target_seg, IREG_temp2);
+    uop_NOP_BARRIER(ir);
+    uop_set_jump_dest(ir, jump_uop);
+    codegen_flags_changed = 0;
+    return op_pc;
 }
 static uint32_t
 shift_common_variable_16(ir_data_t *ir, uint32_t fetchdat, uint32_t op_pc, x86seg *target_seg, int count_reg)
@@ -952,15 +962,12 @@ uint32_t
 ropD3_w(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
 {
     x86seg *target_seg = NULL;
+    int     jump_uop;
 
     if ((fetchdat & 0x30) == 0x10) /*RCL/RCR*/
         return 0;
 
-    if (!(CL & 0x1f) || !block->ins)
-        return 0;
-
     uop_AND_IMM(ir, IREG_temp2, REG_ECX, 0x1f);
-    uop_CMP_IMM_JZ(ir, IREG_temp2, 0, codegen_exit_rout);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
     if ((fetchdat & 0xc0) != 0xc0) {
@@ -970,25 +977,29 @@ ropD3_w(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetc
         CHECK_SEG_LIMITS(block, ir, target_seg, IREG_eaaddr, 1);
         uop_MEM_LOAD_REG(ir, IREG_temp0_W, ireg_seg_base(target_seg), IREG_eaaddr);
     }
+    jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp2, 0);
 
-    return shift_common_variable_16(ir, fetchdat, op_pc, target_seg, IREG_temp2);
+    op_pc = shift_common_variable_16(ir, fetchdat, op_pc, target_seg, IREG_temp2);
+    uop_NOP_BARRIER(ir);
+    uop_set_jump_dest(ir, jump_uop);
+    codegen_flags_changed = 0;
+    return op_pc;
 }
 uint32_t
 ropD3_l(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
 {
+    int jump_uop;
+
     if ((fetchdat & 0x30) == 0x10) /*RCL/RCR*/
         return 0;
 
-    if (!(CL & 0x1f) || !block->ins)
-        return 0;
-
     uop_AND_IMM(ir, IREG_temp2, REG_ECX, 0x1f);
-    uop_CMP_IMM_JZ(ir, IREG_temp2, 0, codegen_exit_rout);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
     if ((fetchdat & 0xc0) == 0xc0) {
         int dest_reg = fetchdat & 7;
 
+        jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp2, 0);
         switch (fetchdat & 0x38) {
             case 0x00: /*ROL*/
                 emit_flags_rebuild_zpna(ir);
@@ -1040,6 +1051,7 @@ ropD3_l(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetc
         codegen_check_seg_write(block, ir, target_seg);
         CHECK_SEG_LIMITS(block, ir, target_seg, IREG_eaaddr, 3);
         uop_MEM_LOAD_REG(ir, IREG_temp0, ireg_seg_base(target_seg), IREG_eaaddr);
+        jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp2, 0);
 
         switch (fetchdat & 0x38) {
             case 0x00: /*ROL*/
@@ -1091,7 +1103,9 @@ ropD3_l(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetc
         }
     }
 
-    codegen_flags_changed = 1;
+    uop_NOP_BARRIER(ir);
+    uop_set_jump_dest(ir, jump_uop);
+    codegen_flags_changed = 0;
     return op_pc + 1;
 }
 
@@ -1399,12 +1413,9 @@ static uint32_t
 shxd_cl_common(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op_32, uint32_t op_pc, int is32, int is_shrd)
 {
     x86seg *target_seg = NULL;
-
-    if (!(CL & 0x1f) || !block->ins)
-        return 0;
+    int     jump_uop;
 
     uop_AND_IMM(ir, IREG_temp2, IREG_ECX, 0x1f);
-    uop_CMP_IMM_JZ(ir, IREG_temp2, 0, codegen_exit_rout);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
     if ((fetchdat & 0xc0) == 0xc0) {
@@ -1425,8 +1436,11 @@ shxd_cl_common(codeblock_t *block, ir_data_t *ir, uint32_t fetchdat, uint32_t op
         }
     }
 
+    jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp2, 0);
     shxd_variable_common(ir, fetchdat, target_seg, is32, is_shrd);
-    codegen_flags_changed = 1;
+    uop_NOP_BARRIER(ir);
+    uop_set_jump_dest(ir, jump_uop);
+    codegen_flags_changed = 0;
 
     return op_pc + 1;
 }
