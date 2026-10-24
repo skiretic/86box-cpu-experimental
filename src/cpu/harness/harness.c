@@ -286,6 +286,14 @@ step(const char *what)
         fprintf(stderr, "harness: %s\n", what);
 }
 
+/* The machine: the 600 MHz Deschutes with its internal FPU and the 486
+   debug registers option off, unless --cpu, --fpu-type or --dbg486 say
+   otherwise. */
+static char machine_family[64]   = "pentium2_deschutes";
+static char machine_cpu_name[32] = "600";
+static int  machine_fpu_type     = FPU_INTERNAL;
+static int  machine_dbg486       = 0;
+
 static void
 setup_machine(int softfloat, int fast_fpu_env)
 {
@@ -293,24 +301,25 @@ setup_machine(int softfloat, int fast_fpu_env)
     int        n;
 
     mem_size = HARNESS_RAM_KB;
-    cpu_f    = cpu_get_family("pentium2_deschutes");
+    cpu_f    = cpu_get_family(machine_family);
     if (cpu_f == NULL) {
-        fprintf(stderr, "no pentium2_deschutes family in the CPU table\n");
+        fprintf(stderr, "no %s family in the CPU table\n", machine_family);
         exit(2);
     }
     cpus = cpu_f->cpus;
     for (n = 0; cpus[n].name[0]; n++) {
-        if (!strcmp(cpus[n].name, "600"))
+        if (!strcmp(cpus[n].name, machine_cpu_name))
             break;
     }
     if (!cpus[n].name[0]) {
-        fprintf(stderr, "no 600 MHz Deschutes in the CPU table\n");
+        fprintf(stderr, "no CPU %s in the %s family\n", machine_cpu_name, machine_family);
         exit(2);
     }
-    cpu             = n;
-    fpu_type        = FPU_INTERNAL;
-    fpu_softfloat   = softfloat;
-    cpu_use_dynarec = 1;
+    cpu                = n;
+    fpu_type           = machine_fpu_type;
+    cpu_debug_regs_486 = machine_dbg486;
+    fpu_softfloat      = softfloat;
+    cpu_use_dynarec    = 1;
     /* The interpreter always records the x87 instruction and data pointers;
        the recompiler only does so under the accurate FPU environment option,
        so the comparison runs with it on unless the fast mode is under test. */
@@ -1006,6 +1015,10 @@ usage(void)
             "  --fast-fpu-env       accurate FPU environment off: compiled x87 code leaves the\n"
             "                       FNSTENV/FNSAVE pointer words stale, so those cases differ\n"
             "  --nolink             block linking off\n"
+            "  --cpu <family:name>  the CPU table entry, internal family name and CPU name\n"
+            "                       (default pentium2_deschutes:600)\n"
+            "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default FPU_INTERNAL)\n"
+            "  --dbg486             the 486 debug registers option on\n"
             "  --passes <n>         at most n recompiler runs after the interpreter run (default %d:\n"
             "                       mark pass, compile passes until one compiles nothing, compiled 2)\n"
             "  --dump               print every run's final state\n"
@@ -1073,6 +1086,27 @@ main(int argc, char **argv)
             fast_fpu_env = 1;
         } else if (!strcmp(argv[i], "--nolink")) {
             nolink = 1;
+        } else if (!strcmp(argv[i], "--cpu") && i + 1 < argc) {
+            int end = 0;
+
+            /* The whole argument, or nothing: a name too long for the buffer
+               is refused, not cut short */
+            i++;
+            if ((sscanf(argv[i], "%63[^:]:%31[^\n]%n", machine_family, machine_cpu_name, &end) != 2) || argv[i][end]) {
+                fprintf(stderr, "--cpu takes family:name\n");
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--fpu-type") && i + 1 < argc) {
+            char *end;
+            long  v = strtol(argv[++i], &end, 10);
+
+            if ((end == argv[i]) || *end || (v < FPU_NONE) || (v > FPU_INTERNAL)) {
+                fprintf(stderr, "fpu-type must be %d..%d\n", FPU_NONE, FPU_INTERNAL);
+                return 2;
+            }
+            machine_fpu_type = (int) v;
+        } else if (!strcmp(argv[i], "--dbg486")) {
+            machine_dbg486 = 1;
         } else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
             passes = atoi(argv[++i]);
             if (passes < 1 || passes > MAX_RUNS) {
