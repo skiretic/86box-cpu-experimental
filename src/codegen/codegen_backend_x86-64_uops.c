@@ -442,7 +442,6 @@ codegen_CMP_JB(codeblock_t *block, uop_t *uop)
     int       src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
     int       src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
     int       src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
-    uint32_t *jump_p;
 
     if (REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
         host_x86_CMP32_REG_REG(block, src_reg_a, src_reg_b);
@@ -451,8 +450,7 @@ codegen_CMP_JB(codeblock_t *block, uop_t *uop)
     else
         fatal("CMP_JB %02x\n", uop->src_reg_a_real);
 #    endif
-    jump_p  = host_x86_JB_long(block);
-    *jump_p = (uintptr_t) uop->p - ((uintptr_t) jump_p + 4);
+    codegen_exit_Jcc(block, uop, uop->p, host_x86_JB_long, host_x86_JNB_long);
 
     return 0;
 }
@@ -463,7 +461,6 @@ codegen_CMP_JNBE(codeblock_t *block, uop_t *uop)
     int       src_reg_b  = HOST_REG_GET(uop->src_reg_b_real);
     int       src_size_a = IREG_GET_SIZE(uop->src_reg_a_real);
     int       src_size_b = IREG_GET_SIZE(uop->src_reg_b_real);
-    uint32_t *jump_p;
 
     if (REG_IS_L(src_size_a) && REG_IS_L(src_size_b)) {
         host_x86_CMP32_REG_REG(block, src_reg_a, src_reg_b);
@@ -472,8 +469,7 @@ codegen_CMP_JNBE(codeblock_t *block, uop_t *uop)
     else
         fatal("CMP_JNBE %02x\n", uop->src_reg_a_real);
 #    endif
-    jump_p  = host_x86_JNBE_long(block);
-    *jump_p = (uintptr_t) uop->p - ((uintptr_t) jump_p + 4);
+    codegen_exit_Jcc(block, uop, uop->p, host_x86_JNBE_long, host_x86_JBE_long);
 
     return 0;
 }
@@ -488,18 +484,20 @@ codegen_CMP_JNWITHIN(codeblock_t *block, uop_t *uop)
     int       lo_size  = IREG_GET_SIZE(uop->src_reg_b_real);
     int       hi_size  = IREG_GET_SIZE(uop->src_reg_c_real);
     uint32_t *jump_p;
+    void     *exit_p;
 
     if (REG_IS_L(src_size) && REG_IS_L(lo_size) && REG_IS_L(hi_size)) {
         host_x86_CMP32_REG_REG(block, src_reg, lo_reg);
-        jump_p  = host_x86_JB_long(block);
-        *jump_p = (uintptr_t) uop->p - ((uintptr_t) jump_p + 4);
+        jump_p = host_x86_JB_long(block);
         if (uop->imm_data) {
             host_x86_LEA_REG_IMM(block, REG_ECX, src_reg, uop->imm_data);
             host_x86_CMP32_REG_REG(block, REG_ECX, hi_reg);
         } else
             host_x86_CMP32_REG_REG(block, src_reg, hi_reg);
-        jump_p  = host_x86_JNBE_long(block);
-        *jump_p = (uintptr_t) uop->p - ((uintptr_t) jump_p + 4);
+        /*Both branches leave through one exit, the second one's arm when it
+          has one*/
+        exit_p  = codegen_exit_Jcc(block, uop, uop->p, host_x86_JNBE_long, host_x86_JBE_long);
+        *jump_p = (uintptr_t) exit_p - ((uintptr_t) jump_p + 4);
     }
 #    ifdef RECOMPILER_DEBUG
     else
@@ -1442,7 +1440,7 @@ codegen_LOAD_SEG(codeblock_t *block, uop_t *uop)
 #    endif
     host_x86_CALL(block, (void *) loadseg);
     host_x86_TEST32_REG(block, REG_EAX, REG_EAX);
-    host_x86_JNZ(block, codegen_exit_rout);
+    codegen_exit_Jcc(block, uop, codegen_exit_rout, host_x86_JNZ_long, host_x86_JZ_long);
 
     return 0;
 }
@@ -1519,7 +1517,7 @@ codegen_FCOM_SIGNED_ZERO(codeblock_t *block, uop_t *uop)
 }
 
 static void
-codegen_mem_load(codeblock_t *block, int kind, int dest_reg, void *rout)
+codegen_mem_load(codeblock_t *block, uop_t *uop, int kind, int dest_reg, void *rout)
 {
     uint32_t *misaligned_p = NULL;
     uint32_t *miss_p;
@@ -1560,7 +1558,7 @@ codegen_mem_load(codeblock_t *block, int kind, int dest_reg, void *rout)
     host_x86_MOV32_REG_REG(block, REG_ESI, REG_ECX);
     host_x86_CALL(block, rout);
     host_x86_TEST32_REG(block, REG_ESI, REG_ESI);
-    host_x86_JNZ(block, codegen_exit_rout);
+    codegen_exit_Jcc(block, uop, codegen_exit_rout, host_x86_JNZ_long, host_x86_JZ_long);
     switch (kind) {
         case MEM_B:
             host_x86_MOV8_REG_REG(block, dest_reg, REG_ECX);
@@ -1579,7 +1577,7 @@ codegen_mem_load(codeblock_t *block, int kind, int dest_reg, void *rout)
 }
 
 static void
-codegen_mem_store(codeblock_t *block, int kind, void *rout)
+codegen_mem_store(codeblock_t *block, uop_t *uop, int kind, void *rout)
 {
     uint32_t *misaligned_p = NULL;
     uint32_t *miss_p;
@@ -1620,7 +1618,7 @@ codegen_mem_store(codeblock_t *block, int kind, void *rout)
     host_x86_MOV32_REG_REG(block, REG_ESI, REG_EDI);
     host_x86_CALL(block, rout);
     host_x86_TEST32_REG(block, REG_ESI, REG_ESI);
-    host_x86_JNZ(block, codegen_exit_rout);
+    codegen_exit_Jcc(block, uop, codegen_exit_rout, host_x86_JNZ_long, host_x86_JZ_long);
     jump_here(done_p);
 }
 
@@ -1633,11 +1631,11 @@ codegen_MEM_LOAD_ABS(codeblock_t *block, uop_t *uop)
 
     host_x86_LEA_REG_IMM(block, REG_ESI, seg_reg, uop->imm_data);
     if (REG_IS_B(dest_size)) {
-        codegen_mem_load(block, MEM_B, dest_reg, codegen_mem_load_byte);
+        codegen_mem_load(block, uop, MEM_B, dest_reg, codegen_mem_load_byte);
     } else if (REG_IS_W(dest_size)) {
-        codegen_mem_load(block, MEM_W, dest_reg, codegen_mem_load_word);
+        codegen_mem_load(block, uop, MEM_W, dest_reg, codegen_mem_load_word);
     } else if (REG_IS_L(dest_size)) {
-        codegen_mem_load(block, MEM_L, dest_reg, codegen_mem_load_long);
+        codegen_mem_load(block, uop, MEM_L, dest_reg, codegen_mem_load_long);
     }
 #    ifdef RECOMPILER_DEBUG
     else
@@ -1662,13 +1660,13 @@ codegen_MEM_LOAD_REG(codeblock_t *block, uop_t *uop)
         }
     }
     if (REG_IS_B(dest_size)) {
-        codegen_mem_load(block, MEM_B, dest_reg, codegen_mem_load_byte);
+        codegen_mem_load(block, uop, MEM_B, dest_reg, codegen_mem_load_byte);
     } else if (REG_IS_W(dest_size)) {
-        codegen_mem_load(block, MEM_W, dest_reg, codegen_mem_load_word);
+        codegen_mem_load(block, uop, MEM_W, dest_reg, codegen_mem_load_word);
     } else if (REG_IS_L(dest_size)) {
-        codegen_mem_load(block, MEM_L, dest_reg, codegen_mem_load_long);
+        codegen_mem_load(block, uop, MEM_L, dest_reg, codegen_mem_load_long);
     } else if (REG_IS_Q(dest_size)) {
-        codegen_mem_load(block, MEM_Q, dest_reg, codegen_mem_load_quad);
+        codegen_mem_load(block, uop, MEM_Q, dest_reg, codegen_mem_load_quad);
     }
 #    ifdef RECOMPILER_DEBUG
     else
@@ -1693,7 +1691,7 @@ codegen_MEM_LOAD_REG_EA(codeblock_t *block, uop_t *uop)
     else
         fatal("MEM_LOAD_REG_EA - %02x\n", uop->dest_reg_a_real);
     host_x86_TEST32_REG(block, REG_ESI, REG_ESI);
-    host_x86_JNZ(block, codegen_exit_rout);
+    codegen_exit_Jcc(block, uop, codegen_exit_rout, host_x86_JNZ_long, host_x86_JZ_long);
     if (REG_IS_W(dest_size))
         host_x86_MOV16_REG_REG(block, dest_reg, REG_ECX);
     else
@@ -1716,7 +1714,7 @@ codegen_MEM_LOAD_SINGLE(codeblock_t *block, uop_t *uop)
     host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
     if (uop->imm_data)
         host_x86_ADD32_REG_IMM(block, REG_ESI, uop->imm_data);
-    codegen_mem_load(block, MEM_SINGLE, dest_reg, codegen_mem_load_single);
+    codegen_mem_load(block, uop, MEM_SINGLE, dest_reg, codegen_mem_load_single);
 
     return 0;
 }
@@ -1735,7 +1733,7 @@ codegen_MEM_LOAD_DOUBLE(codeblock_t *block, uop_t *uop)
     host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
     if (uop->imm_data)
         host_x86_ADD32_REG_IMM(block, REG_ESI, uop->imm_data);
-    codegen_mem_load(block, MEM_DOUBLE, dest_reg, codegen_mem_load_double);
+    codegen_mem_load(block, uop, MEM_DOUBLE, dest_reg, codegen_mem_load_double);
 
     return 0;
 }
@@ -1750,13 +1748,13 @@ codegen_MEM_STORE_ABS(codeblock_t *block, uop_t *uop)
     host_x86_LEA_REG_IMM(block, REG_ESI, seg_reg, uop->imm_data);
     if (REG_IS_B(src_size)) {
         host_x86_MOV8_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_B, codegen_mem_store_byte);
+        codegen_mem_store(block, uop, MEM_B, codegen_mem_store_byte);
     } else if (REG_IS_W(src_size)) {
         host_x86_MOV16_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_W, codegen_mem_store_word);
+        codegen_mem_store(block, uop, MEM_W, codegen_mem_store_word);
     } else if (REG_IS_L(src_size)) {
         host_x86_MOV32_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_L, codegen_mem_store_long);
+        codegen_mem_store(block, uop, MEM_L, codegen_mem_store_long);
     }
 #    ifdef RECOMPILER_DEBUG
     else
@@ -1774,7 +1772,7 @@ codegen_MEM_STORE_IMM_8(codeblock_t *block, uop_t *uop)
 
     host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
     host_x86_MOV8_REG_IMM(block, REG_ECX, uop->imm_data);
-    codegen_mem_store(block, MEM_B, codegen_mem_store_byte);
+    codegen_mem_store(block, uop, MEM_B, codegen_mem_store_byte);
 
     return 0;
 }
@@ -1786,7 +1784,7 @@ codegen_MEM_STORE_IMM_16(codeblock_t *block, uop_t *uop)
 
     host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
     host_x86_MOV16_REG_IMM(block, REG_ECX, uop->imm_data);
-    codegen_mem_store(block, MEM_W, codegen_mem_store_word);
+    codegen_mem_store(block, uop, MEM_W, codegen_mem_store_word);
 
     return 0;
 }
@@ -1798,7 +1796,7 @@ codegen_MEM_STORE_IMM_32(codeblock_t *block, uop_t *uop)
 
     host_x86_LEA_REG_REG(block, REG_ESI, seg_reg, addr_reg);
     host_x86_MOV32_REG_IMM(block, REG_ECX, uop->imm_data);
-    codegen_mem_store(block, MEM_L, codegen_mem_store_long);
+    codegen_mem_store(block, uop, MEM_L, codegen_mem_store_long);
 
     return 0;
 }
@@ -1816,16 +1814,16 @@ codegen_MEM_STORE_REG(codeblock_t *block, uop_t *uop)
         host_x86_ADD32_REG_IMM(block, REG_ESI, uop->imm_data);
     if (REG_IS_B(src_size)) {
         host_x86_MOV8_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_B, codegen_mem_store_byte);
+        codegen_mem_store(block, uop, MEM_B, codegen_mem_store_byte);
     } else if (REG_IS_W(src_size)) {
         host_x86_MOV16_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_W, codegen_mem_store_word);
+        codegen_mem_store(block, uop, MEM_W, codegen_mem_store_word);
     } else if (REG_IS_L(src_size)) {
         host_x86_MOV32_REG_REG(block, REG_ECX, src_reg);
-        codegen_mem_store(block, MEM_L, codegen_mem_store_long);
+        codegen_mem_store(block, uop, MEM_L, codegen_mem_store_long);
     } else if (REG_IS_Q(src_size)) {
         host_x86_MOVQ_XREG_XREG(block, REG_XMM_TEMP, src_reg);
-        codegen_mem_store(block, MEM_Q, codegen_mem_store_quad);
+        codegen_mem_store(block, uop, MEM_Q, codegen_mem_store_quad);
     }
 #    ifdef RECOMPILER_DEBUG
     else
@@ -1851,7 +1849,7 @@ codegen_MEM_STORE_SINGLE(codeblock_t *block, uop_t *uop)
     if (uop->imm_data)
         host_x86_ADD32_REG_IMM(block, REG_ESI, uop->imm_data);
     host_x86_CVTSD2SS_XREG_XREG(block, REG_XMM_TEMP, src_reg);
-    codegen_mem_store(block, MEM_SINGLE, codegen_mem_store_single);
+    codegen_mem_store(block, uop, MEM_SINGLE, codegen_mem_store_single);
 
     return 0;
 }
@@ -1871,7 +1869,7 @@ codegen_MEM_STORE_DOUBLE(codeblock_t *block, uop_t *uop)
     if (uop->imm_data)
         host_x86_ADD32_REG_IMM(block, REG_ESI, uop->imm_data);
     host_x86_MOVQ_XREG_XREG(block, REG_XMM_TEMP, src_reg);
-    codegen_mem_store(block, MEM_DOUBLE, codegen_mem_store_double);
+    codegen_mem_store(block, uop, MEM_DOUBLE, codegen_mem_store_double);
 
     return 0;
 }
