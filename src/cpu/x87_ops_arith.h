@@ -31,6 +31,20 @@ static inline double float_add(double src, double val, int round)
     return _mm_cvtsd_f64(xmm_res);
 }
 
+/* With two NaN operands, ADDSD/MULSD return the first one. A C operator or
+   an intrinsic lets the compiler swap the operands, so pin the order here. */
+static inline double x87_add_sd(double a, double b)
+{
+    __asm__("addsd %1, %0" : "+x"(a) : "xm"(b));
+    return a;
+}
+
+static inline double x87_mul_sd(double a, double b)
+{
+    __asm__("mulsd %1, %0" : "+x"(a) : "xm"(b));
+    return a;
+}
+
 #define DO_FADD(use_var)                                               \
     do                                                                 \
     {                                                                  \
@@ -38,7 +52,19 @@ static inline double float_add(double src, double val, int round)
     }                                                                  \
     while (0)
 
+#define DO_FMUL(use_var) ST(0) = x87_mul_sd(ST(0), use_var)
+
 #else
+static inline double x87_add_sd(double a, double b)
+{
+    return a + b;
+}
+
+static inline double x87_mul_sd(double a, double b)
+{
+    return a * b;
+}
+
 #define DO_FADD(use_var)                                               \
     do                                                                 \
     {                                                                  \
@@ -49,6 +75,8 @@ static inline double float_add(double src, double val, int round)
             fesetround(FE_TONEAREST);                                  \
     }                                                                  \
     while (0)
+
+#define DO_FMUL(use_var) ST(0) *= use_var
 #endif
 
 #define opFPU(name, optype, a_size, load_var, get, use_var, cycle_postfix)                                                                         \
@@ -137,7 +165,7 @@ static inline double float_add(double src, double val, int round)
         load_var = get();                                                                                                                          \
         if (cpu_state.abrt)                                                                                                                        \
             return 1;                                                                                                                              \
-        ST(0) *= use_var; FP_ROUND_PC(ST(0));                                                                                                                          \
+        DO_FMUL(use_var); FP_ROUND_PC(ST(0));                                                                                                                          \
         FP_TAG_VALID;                                                                                                                              \
         CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fmul##cycle_postfix) : ((x87_timings.fmul##cycle_postfix) * cpu_multi));           \
         CONCURRENCY_CYCLES((fpu_type >= FPU_487SX) ? (x87_concurrency.fmul##cycle_postfix) : ((x87_concurrency.fmul##cycle_postfix) * cpu_multi)); \
@@ -198,7 +226,7 @@ static int opFADD(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(0) = ST(0) + ST(fetchdat & 7); FP_ROUND_PC(ST(0));
+    ST(0) = x87_add_sd(ST(0), ST(fetchdat & 7)); FP_ROUND_PC(ST(0));
     FP_TAG_VALID;
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fadd) : (x87_timings.fadd * cpu_multi));
     CONCURRENCY_CYCLES((fpu_type >= FPU_487SX) ? (x87_concurrency.fadd) : (x87_concurrency.fadd * cpu_multi));
@@ -209,7 +237,7 @@ opFADDr(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(fetchdat & 7) = ST(fetchdat & 7) + ST(0); FP_ROUND_PC(ST(fetchdat & 7));
+    ST(fetchdat & 7) = x87_add_sd(ST(fetchdat & 7), ST(0)); FP_ROUND_PC(ST(fetchdat & 7));
     FP_TAG_VALID_F;
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fadd) : (x87_timings.fadd * cpu_multi));
     CONCURRENCY_CYCLES((fpu_type >= FPU_487SX) ? (x87_concurrency.fadd) : (x87_concurrency.fadd * cpu_multi));
@@ -220,7 +248,7 @@ opFADDP(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(fetchdat & 7) = ST(fetchdat & 7) + ST(0); FP_ROUND_PC(ST(fetchdat & 7));
+    ST(fetchdat & 7) = x87_add_sd(ST(fetchdat & 7), ST(0)); FP_ROUND_PC(ST(fetchdat & 7));
     FP_TAG_VALID_F;
     x87_pop();
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fadd) : (x87_timings.fadd * cpu_multi));
@@ -404,7 +432,7 @@ opFMUL(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(0) = ST(0) * ST(fetchdat & 7); FP_ROUND_PC(ST(0));
+    ST(0) = x87_mul_sd(ST(0), ST(fetchdat & 7)); FP_ROUND_PC(ST(0));
     FP_TAG_VALID;
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fmul) : (x87_timings.fmul * cpu_multi));
     CONCURRENCY_CYCLES((fpu_type >= FPU_487SX) ? (x87_concurrency.fmul) : (x87_concurrency.fmul * cpu_multi));
@@ -415,7 +443,7 @@ opFMULr(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(fetchdat & 7) = ST(0) * ST(fetchdat & 7); FP_ROUND_PC(ST(fetchdat & 7));
+    ST(fetchdat & 7) = x87_mul_sd(ST(0), ST(fetchdat & 7)); FP_ROUND_PC(ST(fetchdat & 7));
     FP_TAG_VALID_F;
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fmul) : (x87_timings.fmul * cpu_multi));
     CONCURRENCY_CYCLES((fpu_type >= FPU_487SX) ? (x87_concurrency.fmul) : (x87_concurrency.fmul * cpu_multi));
@@ -426,7 +454,7 @@ opFMULP(uint32_t fetchdat)
 {
     FP_ENTER();
     cpu_state.pc++;
-    ST(fetchdat & 7) = ST(0) * ST(fetchdat & 7); FP_ROUND_PC(ST(fetchdat & 7));
+    ST(fetchdat & 7) = x87_mul_sd(ST(0), ST(fetchdat & 7)); FP_ROUND_PC(ST(fetchdat & 7));
     FP_TAG_VALID_F;
     x87_pop();
     CLOCK_CYCLES_FPU((fpu_type >= FPU_487SX) ? (x87_timings.fmul) : (x87_timings.fmul * cpu_multi));
