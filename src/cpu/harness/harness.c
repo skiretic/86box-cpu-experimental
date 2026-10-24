@@ -81,6 +81,7 @@ typedef struct harness_state_t {
     int      top;
     uint8_t  tag[8];
     uint64_t st[8];
+    uint16_t st_exp[8]; /* softfloat: sign and exponent of each register; st holds the significand */
     uint64_t mm[8];
     uint8_t  ismmx;
     uint32_t vector;
@@ -367,6 +368,55 @@ build_code(const harness_case_t *c)
     code_len = n;
 }
 
+/* A case's double as an 80-bit register, exactly. A NaN is built by hand:
+   f64_to_extF80 would quiet a signaling one. */
+static floatx80
+widen_double(double d)
+{
+    struct softfloat_status_t status;
+    uint64_t                  b;
+    floatx80                  r;
+
+    memcpy(&b, &d, 8);
+    if (((b >> 52) & 0x7ff) == 0x7ff && (b & 0x000fffffffffffffULL)) {
+        r.signExp = ((b >> 48) & 0x8000) | 0x7fff;
+        r.signif  = 0x8000000000000000ULL | ((b & 0x000fffffffffffffULL) << 11);
+        return r;
+    }
+    memset(&status, 0, sizeof(status));
+    return f64_to_extF80(b, &status);
+}
+
+/* The softfloat FPU keeps its own state (fpu_state) and its own registers,
+   whose significands are the MMX registers. The case's control word goes
+   in as FLDCW would leave it. A valid register holds the case's double; an
+   empty one holds the case's MMX value as MMX code leaves it (exponent all
+   ones), the one place both fit in one register. Tags as FRSTOR sets them
+   from the register contents. */
+static void
+load_softfloat(const harness_case_t *c)
+{
+    fpu_state.cwd = (c->npxc & ~FPU_CW_Reserved_Bits) | 0x0040;
+    fpu_state.swd = (c->top & 7) << 11;
+    fpu_state.tos = c->top & 7;
+    fpu_state.tag = 0;
+    for (int i = 0; i < 8; i++) {
+        if (c->tag[i] == TAG_EMPTY) {
+            fpu_state.st_space[i].signExp = 0xffff;
+            fpu_state.st_space[i].signif  = c->mm[i];
+            fpu_state.tag |= X87_TAG_EMPTY << (i * 2);
+        } else {
+            fpu_state.st_space[i] = widen_double(c->st[i]);
+            fpu_state.tag |= FPU_tagof(fpu_state.st_space[i]) << (i * 2);
+        }
+    }
+    fpu_state.foo = 0;
+    fpu_state.fip = 0;
+    fpu_state.fdp = 0;
+    fpu_state.fcs = 0;
+    fpu_state.fds = 0;
+}
+
 static void
 load_case(const harness_case_t *c, int with_code)
 {
@@ -458,6 +508,8 @@ load_case(const harness_case_t *c, int with_code)
         cpu_state.MM[i].q = c->mm[i];
     }
     cpu_state.ismmx = 0;
+    if (fpu_softfloat)
+        load_softfloat(c);
     codegen_set_rounding_mode((c->npxc >> 10) & 3);
     fpu_ferr  = 0;
     fpu_ignne = 0;
@@ -567,6 +619,20 @@ capture(harness_state_t *s, int status)
         memcpy(&s->st[i], &cpu_state.ST[i], 8);
         s->mm[i] = cpu_state.MM[i].q;
     }
+    /* The softfloat FPU leaves the fields above as load_case() set them:
+       its own state is what the runs are compared on. The MMX registers
+       are the registers' significands. */
+    if (fpu_softfloat) {
+        s->npxc = fpu_state.cwd;
+        s->npxs = i387_get_status_word();
+        s->top  = fpu_state.tos;
+        for (int i = 0; i < 8; i++) {
+            s->tag[i]    = (fpu_state.tag >> (i * 2)) & 3;
+            s->st[i]     = fpu_state.st_space[i].signif;
+            s->st_exp[i] = fpu_state.st_space[i].signExp;
+            s->mm[i]     = fpu_state.st_space[i].signif;
+        }
+    }
     s->ismmx     = cpu_state.ismmx;
     s->vector    = get32(HARNESS_RECORD + REC_VECTOR);
     s->tos       = get32(HARNESS_RECORD + REC_TOS);
@@ -668,6 +734,10 @@ compare(const harness_state_t *a, const harness_state_t *b)
             snprintf(name, sizeof(name), "ST[%d]", i);
             diff(name, a->st[i], b->st[i]);
         }
+        if (a->st_exp[i] != b->st_exp[i]) {
+            snprintf(name, sizeof(name), "ST[%d].exp", i);
+            diff(name, a->st_exp[i], b->st_exp[i]);
+        }
         if (a->mm[i] != b->mm[i]) {
             snprintf(name, sizeof(name), "MM%d", i);
             diff(name, a->mm[i], b->mm[i]);
@@ -706,6 +776,10 @@ dump_state(const harness_state_t *s)
            s->tag[0], s->tag[1], s->tag[2], s->tag[3], s->tag[4], s->tag[5], s->tag[6], s->tag[7]);
     for (int i = 0; i < 8; i++) {
         double d;
+        if (fpu_softfloat) {
+            printf("    ST[%d]=%04x:%016" PRIx64 "  MM%d=%016" PRIx64 "\n", i, s->st_exp[i], s->st[i], i, s->mm[i]);
+            continue;
+        }
         memcpy(&d, &s->st[i], 8);
         printf("    ST[%d]=%016" PRIx64 " (%.17g)  MM%d=%016" PRIx64 "\n", i, s->st[i], d, i, s->mm[i]);
     }
@@ -723,7 +797,7 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->eflags != b->eflags || memcmp(a->seg, b->seg, sizeof(a->seg)) || memcmp(a->base, b->base, sizeof(a->base))
         || a->pc != b->pc || a->cr0_val != b->cr0_val || a->abrt != b->abrt || a->npxc != b->npxc || a->npxs != b->npxs
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
-        || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
+        || memcmp(a->st_exp, b->st_exp, sizeof(a->st_exp)) || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
         || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash
         || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash;
 }
