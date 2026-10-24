@@ -20,6 +20,7 @@ add_executable(cpu_harness
     ${CMAKE_SOURCE_DIR}/src/mem/mmu_2386.c
     ${CMAKE_SOURCE_DIR}/src/mem/smram.c
     ${CMAKE_SOURCE_DIR}/src/timer.c
+    ${CMAKE_SOURCE_DIR}/src/lapic_policy.c
 )
 
 set_target_properties(cpu_harness PROPERTIES MACOSX_BUNDLE FALSE)

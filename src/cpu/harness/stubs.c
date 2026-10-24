@@ -24,6 +24,8 @@
 
 #include <86box/86box.h>
 #include <86box/machine.h>
+#include <86box/device.h>
+#include <86box/chipset.h>
 #include <86box/pic.h>
 #include <86box/plat.h>
 
@@ -316,4 +318,123 @@ fatal(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     harness_fatal(buf);
+}
+
+/* The APIC (lapic.c, ioapic.c, apic_cpu_policy.c, with the chipsets) is
+   not built into the harness: a board without one, the 8259 path only,
+   no local APIC feature, nothing to sync or reset; lapic_policy.c, the
+   pure register rules the CPU's local APIC code sanitizes with, is
+   linked in. The I/O turbo throttle, the NMI line hook and the CPU clock
+   the local APIC timer scales by are the emulator's globals (io.c,
+   nmi.c, video.c). */
+uint8_t ioapic_irq_path_active = 0;
+int     io_turbo_throttle      = 0;
+double  cpuclock               = 0.0;
+int (*nmi_line_level)(void)    = NULL;
+
+void
+lapic_set_index_source(lapic_index_source_t source)
+{
+    (void) source;
+}
+
+void
+lapic_index_board_reset(uint8_t index)
+{
+    (void) index;
+}
+
+void
+lapic_lint1_redeliver_index(uint8_t index)
+{
+    (void) index;
+}
+
+void
+lapic_id_sync_index(uint8_t lapic_index, uint8_t id)
+{
+    (void) lapic_index;
+    (void) id;
+}
+
+#define LAPIC_SYNC_STUB(name)                       \
+    void name(uint8_t lapic_index, uint32_t val)    \
+    {                                               \
+        (void) lapic_index;                         \
+        (void) val;                                 \
+    }
+LAPIC_SYNC_STUB(lapic_svr_sync_index)
+LAPIC_SYNC_STUB(lapic_tpr_sync_index)
+LAPIC_SYNC_STUB(lapic_ldr_sync_index)
+LAPIC_SYNC_STUB(lapic_version_sync_index)
+LAPIC_SYNC_STUB(lapic_ppr_sync_index)
+LAPIC_SYNC_STUB(lapic_esr_sync_index)
+LAPIC_SYNC_STUB(lapic_icr_lo_sync_index)
+LAPIC_SYNC_STUB(lapic_icr_hi_sync_index)
+LAPIC_SYNC_STUB(lapic_rrr_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_timer_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_thermal_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_perf_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_lint0_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_lint1_sync_index)
+LAPIC_SYNC_STUB(lapic_lvt_error_sync_index)
+LAPIC_SYNC_STUB(lapic_timer_initial_sync_index)
+LAPIC_SYNC_STUB(lapic_timer_divide_cfg_sync_index)
+#undef LAPIC_SYNC_STUB
+
+int
+apic_cpu_feature_enabled_for_model(int model_capable)
+{
+    (void) model_capable;
+    return 0;
+}
+
+int
+ioapic_external_interrupt_pending(void)
+{
+    return 0;
+}
+
+int
+ioapic_external_interrupt_vector(void)
+{
+    return -1;
+}
+
+int
+ioapic_pic_fallback_allowed(void)
+{
+    return 1;
+}
+
+int
+ioapic_lint1_raise(void)
+{
+    return 0;
+}
+
+void
+ioapic_processor_reset(void)
+{
+}
+
+void
+lapic_apic_base_msr_sync_index(uint8_t lapic_index, uint64_t val)
+{
+    (void) lapic_index;
+    (void) val;
+}
+
+void
+lapic_arb_id_sync_index(uint8_t lapic_index, uint32_t apr)
+{
+    (void) lapic_index;
+    (void) apr;
+}
+
+void
+lapic_dfr_sync_index(uint8_t lapic_index, uint32_t dfr)
+{
+    (void) lapic_index;
+    (void) dfr;
 }
