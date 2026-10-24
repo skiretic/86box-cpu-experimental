@@ -151,6 +151,12 @@ msgstr "整数倍(&I)"
 msgid "4:&3 Integer scale"
 msgstr "4:3 整数倍(&3)"
 
+msgid "&Center"
+msgstr ""
+
+msgid "4:3 Cen&ter"
+msgstr ""
+
 msgid "Inverted VGA monitor"
 msgstr "色反転"
 
@@ -3112,6 +3118,9 @@ msgstr "入力"
 
 msgid "Key bindings"
 msgstr "キーバインド"
+
+msgid "VM Manager"
+msgstr ""
 
 msgid "Action"
 msgstr "アクション"

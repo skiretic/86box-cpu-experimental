@@ -233,6 +233,10 @@ makeznptable(void)
 }
 
 extern void codegen_set_rounding_mode(int mode); /* x87.h */
+/* The board's processor reset: the MP table hook looks afresh (ioapic.c). */
+extern void ioapic_processor_reset(void);
+/* The processor's RESET or INIT pin resets its local APIC (lapic.c). */
+extern void lapic_index_board_reset(uint8_t index);
 
 /* A soft reset on a processor with an INIT pin: what INIT keeps rather
    than what RESET sets (Pentium Vol. 3, Table 16-1; 16.2: the INIT pin
@@ -240,9 +244,24 @@ extern void codegen_set_rounding_mode(int mode); /* x87.h */
 static int reset_init;
 
 /* Common reset function. */
+/* 1 soft, 2 hard: a reset raised inside a recompiled block, done once the
+   block has returned (x86_reset_deferred) */
+static int reset_deferred;
+
 static void
 reset_common(int hard)
 {
+#ifdef USE_DYNAREC
+    /* A port or memory access in the block may have run a timer that resets
+       the CPU (the keyboard controller's reset pulse): the rest of the block
+       would overwrite the reset state. x86_was_reset ends the block at its
+       next I/O instruction or block link. */
+    if (inrecomp) {
+        reset_deferred = MAX(reset_deferred, hard + 1);
+        x86_was_reset  = 1;
+        return;
+    }
+#endif
     automation_reset(hard);
     /* A soft reset is the INIT pin: on the P54C, the P55C and the P6 family
        it leaves the FPU, the caches and the MSRs (cpu_init_keeps_state). */
@@ -260,6 +279,10 @@ reset_common(int hard)
         else
             return;
     }
+
+    /* The BIOS's POST runs again, and builds its MP table again, perhaps
+       elsewhere. */
+    ioapic_processor_reset();
 
     /* Make sure to gracefully leave SMM. */
     if (in_smm)
@@ -405,10 +428,7 @@ reset_common(int hard)
     cpu_cur_status |= CPU_STATUS_NOTFLATDS | CPU_STATUS_NOTFLATSS | CPU_STATUS_NOTFLATES | CPU_STATUS_NOTWIDEDS | CPU_STATUS_NOTWIDESS;
 #endif
 #ifdef USE_DYNAREC
-    /* A reset raised from inside a recompiled block (a timer run by RDTSC)
-       must not free the block still running; the dynarec loop flushes once
-       the block has returned. */
-    if (hard && !inrecomp)
+    if (hard)
         codegen_reset();
 #endif
     cpu_flush_pending = 0;
@@ -425,6 +445,10 @@ reset_common(int hard)
         /* RESET empties the caches too. */
         cpu_car_invalidate();
     }
+    /* The local APIC goes through INIT at the INIT pin, and after RESET's
+       vendor reset as well, which sets its registers but not what it holds
+       beside them. */
+    lapic_index_board_reset(0);
 
     in_smm = smi_latched = 0;
     /* Out of any HLT: the block end must not step past the reset vector's
@@ -477,6 +501,20 @@ resetx86(void)
 }
 
 /* Soft reset. */
+#ifdef USE_DYNAREC
+void
+x86_reset_deferred(void)
+{
+    if (reset_deferred) {
+        const int hard = reset_deferred - 1;
+
+        reset_deferred = 0;
+        cpu_state.abrt = 0; /* a fault later in the block came after the reset */
+        reset_common(hard);
+    }
+}
+#endif
+
 void
 softresetx86(void)
 {

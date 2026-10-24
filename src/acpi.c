@@ -212,6 +212,11 @@ acpi_update_irq(acpi_t *dev)
             break;
     }
 
+    /* The southbridge's view of SCI, apart from the line it is steered to
+       (acpi_set_sci_hook). */
+    if (dev->sci_hook)
+        dev->sci_hook(dev->sci_hook_priv, (dev->regs.pmcntrl & 0x01) && sci_level);
+
     if ((dev->regs.pmcntrl & 0x01) && sci_level)  switch (dev->irq_mode) {
         default:
             if (dev->irq_line != 0)
@@ -272,6 +277,16 @@ acpi_raise_smi(void *priv, int do_smi)
                 smi_raise();
         }
     }
+}
+
+void
+acpi_gp_timer_timeout(void *priv, int n)
+{
+    acpi_t *dev = (acpi_t *) priv;
+
+    dev->regs.glbsts |= (0x04 << n);          /* bit 2 = GP0, bit 3 = GP1 */
+    if (dev->regs.glben & (0x04 << n))
+        acpi_raise_smi(dev, 1);
 }
 
 static uint32_t
@@ -1764,14 +1779,8 @@ acpi_reg_write_sis_5595(int size, uint16_t addr, uint8_t val, void *priv)
             dev->regs.gpe_pin = ((dev->regs.gpe_pin & ~(0x0f << shift32)) | ((val & 0x0f) << shift32));
             if ((machines[machine].init == machine_at_m748mr_init) && (val & 0x02) &&
                 !(dev->regs.gpe_io & 0x00000200)) {
-                dma_reset();
-                dma_set_at(1);
-                device_reset_all(DEVICE_PCI | DEVICE_AGP);
-                pci_reset();
-                mem_a20_alt = 0;
-                mem_a20_recalc();
-                flushmmucache();
-                resetx86();
+                acpi_log("ACPI: GPIO9 driven high, resetting the machine\n");
+                pci_write(0xcf9, 0x06, NULL);
                 }
             break;
         case 0x1e:
@@ -2325,6 +2334,13 @@ acpi_set_trap_update(acpi_t *dev, void (*update)(void *priv), void *priv)
 {
     dev->trap_update = update;
     dev->trap_priv   = priv;
+}
+
+void
+acpi_set_sci_hook(acpi_t *dev, void (*hook)(void *priv, int set), void *priv)
+{
+    dev->sci_hook      = hook;
+    dev->sci_hook_priv = priv;
 }
 
 uint8_t

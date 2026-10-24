@@ -152,6 +152,12 @@ msgstr "&Scala intera"
 msgid "4:&3 Integer scale"
 msgstr "Scala intera 4:&3"
 
+msgid "&Center"
+msgstr ""
+
+msgid "4:3 Cen&ter"
+msgstr ""
+
 msgid "Inverted VGA monitor"
 msgstr "Monitor VGA invertito"
 
@@ -3214,6 +3220,9 @@ msgstr "Ingresso"
 
 msgid "Key bindings"
 msgstr "Associazione dei tasti"
+
+msgid "VM Manager"
+msgstr ""
 
 msgid "Action"
 msgstr "Azione"

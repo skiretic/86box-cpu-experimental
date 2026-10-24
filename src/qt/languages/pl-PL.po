@@ -151,6 +151,12 @@ msgstr "&Skalowanie całkowite"
 msgid "4:&3 Integer scale"
 msgstr "Skalowanie całkowite 4:&3"
 
+msgid "&Center"
+msgstr ""
+
+msgid "4:3 Cen&ter"
+msgstr ""
+
 msgid "Inverted VGA monitor"
 msgstr "Odwrócony monitor VGA"
 
@@ -3123,6 +3129,9 @@ msgstr "Wejście"
 
 msgid "Key bindings"
 msgstr "Przypisania klawiszy"
+
+msgid "VM Manager"
+msgstr ""
 
 msgid "Action"
 msgstr "Akcja"
