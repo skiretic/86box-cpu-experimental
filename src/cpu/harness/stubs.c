@@ -16,7 +16,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
+#ifdef _WIN32
+#    include <windows.h>
+#else
+#    include <sys/mman.h>
+#endif
 
 #include <86box/86box.h>
 #include <86box/machine.h>
@@ -262,20 +266,30 @@ plat_mmap(size_t size, uint8_t executable, uint8_t *large)
 
     if (large)
         *large = 0;
-#if defined __APPLE__ && defined MAP_JIT
+#ifdef _WIN32
+    ret = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE,
+                       executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE);
+    return ret;
+#elif defined __APPLE__ && defined MAP_JIT
     ret = mmap(0, size, PROT_READ | PROT_WRITE | (executable ? PROT_EXEC : 0),
                MAP_ANON | MAP_PRIVATE | (executable ? MAP_JIT : 0), -1, 0);
+    return (ret == MAP_FAILED) ? NULL : ret;
 #else
     ret = mmap(0, size, PROT_READ | PROT_WRITE | (executable ? PROT_EXEC : 0),
                MAP_ANON | MAP_PRIVATE, -1, 0);
-#endif
     return (ret == MAP_FAILED) ? NULL : ret;
+#endif
 }
 
 void
 plat_munmap(void *ptr, size_t size)
 {
+#ifdef _WIN32
+    (void) size;
+    VirtualFree(ptr, 0, MEM_RELEASE);
+#else
     munmap(ptr, size);
+#endif
 }
 
 void
