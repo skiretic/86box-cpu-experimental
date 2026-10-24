@@ -400,15 +400,21 @@ load_case(const harness_case_t *c, int with_code)
        With NE clear it is FERR# and IRQ13, and with no PIC here the
        waiting instruction would stall forever. CD and NW, set by reset,
        cleared: the dynarec loop interprets every block while CD is set
-       and would never run compiled code. The cache flag and the wait
-       states follow CD as they do after a MOV CR0. */
-    cr0 = (cr0 & ~0x60000000) | 0x21;
+       and would never run compiled code. ET as reset sets it; MP, EM, TS,
+       WP, AM and PG clear. The whole register is set, not merged: a case
+       that writes CR0 must not hand its bits to the next run. The cache
+       flag and the wait states follow CD as they do after a MOV CR0. */
+    cr0 = 0x00000031;
     cpu_cache_int_enabled = hascache && !(cr0 & (1 << 30));
     if (hascache)
         cpu_update_waitstates();
     cpu_car_update();
     cr4 = 0;
     cr3 = 0;
+    /* The segment loads below read the GDT through the lookup tables: a
+       translation the previous run left there with paging on would still
+       be used with PG now clear. */
+    flushmmucache();
 
     gdt.base  = HARNESS_GDT;
     gdt.limit = 0x27;
