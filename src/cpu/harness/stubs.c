@@ -9,7 +9,8 @@
  *          CPU test harness: what the CPU core, the recompiler and the
  *          memory layer reach for in the rest of the emulator, as stubs.
  *          No device, no interrupt source, no I/O: every port reads as
- *          open bus and every write is dropped.
+ *          open bus and every write is dropped, except the RAM writer at
+ *          ports 0xe0-0xeb (outb/outw/outl below).
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@
 #include <86box/chipset.h>
 #include <86box/pic.h>
 #include <86box/plat.h>
+#include <86box/mem.h>
 
 #include "harness.h"
 
@@ -211,25 +213,36 @@ inl(uint16_t port)
     return 0xffffffff;
 }
 
+/* A device that writes RAM the way a bus master does, past the CPU's write
+   path, so a case can test that such a write drops the blocks compiled from
+   the bytes it changes. A dword to 0xe0 sets the physical address; a byte,
+   word or dword to 0xe4 writes it there with mem_write{b,w,l}_phys(); a dword
+   to 0xe8 writes it there with mem_write_phys_block(). */
+uint32_t harness_ram_writer_addr;
+
 void
 outb(uint16_t port, uint8_t val)
 {
-    (void) port;
-    (void) val;
+    if (port == 0xe4)
+        mem_writeb_phys(harness_ram_writer_addr, val);
 }
 
 void
 outw(uint16_t port, uint16_t val)
 {
-    (void) port;
-    (void) val;
+    if (port == 0xe4)
+        mem_writew_phys(harness_ram_writer_addr, val);
 }
 
 void
 outl(uint16_t port, uint32_t val)
 {
-    (void) port;
-    (void) val;
+    if (port == 0xe0)
+        harness_ram_writer_addr = val;
+    else if (port == 0xe4)
+        mem_writel_phys(harness_ram_writer_addr, val);
+    else if (port == 0xe8)
+        mem_write_phys_block(&val, harness_ram_writer_addr, 4);
 }
 
 void

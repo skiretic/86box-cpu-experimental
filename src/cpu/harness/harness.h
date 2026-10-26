@@ -64,6 +64,9 @@ typedef struct harness_case_t {
 } harness_case_t;
 
 extern int harness_verbose;
+/* The RAM writer device's latched address (stubs.c); load_case() clears it
+   so every comparison run starts from the same device state. */
+extern uint32_t harness_ram_writer_addr;
 
 extern void harness_fatal(const char *msg);
 

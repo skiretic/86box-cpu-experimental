@@ -442,6 +442,7 @@ load_case(const harness_case_t *c, int with_code)
     mem_invalidate_range(HARNESS_STACK, HARNESS_STACK);
     mem_invalidate_range(HARNESS_RECORD, HARNESS_RECORD);
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
+    harness_ram_writer_addr = 0;
 
     cpu_state.abrt = 0;
     cpu_halted     = 0;
