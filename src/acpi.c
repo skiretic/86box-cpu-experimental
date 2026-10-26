@@ -1405,8 +1405,19 @@ acpi_reg_write_via(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x42:
             /* GPIO port Output Value */
             if (size == 1) {
-                dev->regs.gpio_val = val & 0x13;
+                int old = dev->regs.gpio_val;
+
+                dev->regs.gpio_val = val & 0x1f; /* GPIO0-4 on the 586B */
                 acpi_i2c_set(dev);
+
+                /* The TX100 BIOS resets the machine by driving GPIO3 low, then spins. */
+                if ((machines[machine].init == machine_at_tx100_init) &&
+                    (dev->regs.gpio_dir & 0x08) &&
+                    (old & 0x08) && !(val & 0x08)) {
+                    acpi_log("ACPI: GPIO3 driven low, resetting the machine\n");
+                    pci_write(0xcf9, 0x00, NULL);
+                    pci_write(0xcf9, 0x06, NULL);
+                }
             }
             break;
         case 0x46:
@@ -2529,8 +2540,10 @@ acpi_reset(void *priv)
     }
 
     if (acpi_power_on) {
-        /* Power on always generates a resume event. */
-        // dev->regs.pmsts |= 0x8100;
+        if (machines[machine].init != machine_at_sp97xv_init)
+            /* Power on always generates a resume event. */
+            dev->regs.pmsts |= 0x8100;
+        
         acpi_power_on = 0;
     }
 
@@ -2556,9 +2569,11 @@ acpi_reset(void *priv)
         dev->regs.gpe_io = 0x00030b9f;
         dev->regs.gpe_mul = 0x1001;
 
-        /* Fix for the IN530 CMOS reset jumper */
-        if (machines[machine].init == machine_at_in530_init)
-            dev->regs.gpe_pin = 0x0003ffff;
+        /* SiS 5595 GPIO pin defaults. */
+        uint32_t gpio = machine_get_gpio_acpi_default();
+
+        if (gpio != 0xffffffff)
+            dev->regs.gpe_pin = gpio & 0x0003ffff;
     }
 
     if (dev->vendor == VEN_SIS_5582) {
