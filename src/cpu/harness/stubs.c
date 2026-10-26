@@ -55,6 +55,8 @@ __thread int is_cpu_thread = 1;
 uint8_t io_turbo_map[65536 >> 3];
 
 pic_t pic;
+pic_t pic2;
+int   cascade = 0;
 
 struct i8018x_pcb_t *i8018x_pcb_current = NULL;
 
@@ -248,6 +250,21 @@ picinterrupt(void)
 uint8_t
 pic_irq_ack(void)
 {
+    return 0;
+}
+
+/* The 8086 cores' dual non-cascaded 8259 path (Tandy 2000), linked but not
+   run by the harness */
+uint8_t
+pic_any_pending(void)
+{
+    return pic.int_pending || (!cascade && pic2.int_pending);
+}
+
+uint8_t
+pic_irq_ack_instance(pic_t *dev)
+{
+    (void) dev;
     return 0;
 }
 
