@@ -30,6 +30,7 @@
 #include <86box/pic.h>
 #include <86box/plat.h>
 #include <86box/mem.h>
+#include <86box/thread.h>
 
 #include "harness.h"
 
@@ -467,4 +468,33 @@ lapic_dfr_sync_index(uint8_t lapic_index, uint32_t dfr)
 {
     (void) lapic_index;
     (void) dfr;
+}
+
+/* The harness runs one thread: mem.c's mapping lock has nothing to exclude. */
+static int harness_mutex_dummy;
+
+mutex_t *
+thread_create_mutex(void)
+{
+    return &harness_mutex_dummy;
+}
+
+void
+thread_close_mutex(mutex_t *arg)
+{
+    (void) arg;
+}
+
+int
+thread_wait_mutex(mutex_t *arg)
+{
+    (void) arg;
+    return 1;
+}
+
+int
+thread_release_mutex(mutex_t *mutex)
+{
+    (void) mutex;
+    return 1;
 }
