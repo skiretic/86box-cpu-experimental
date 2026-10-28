@@ -277,6 +277,17 @@ emit_epilogue(uint8_t *p, int mode16)
 /* ---- machine --------------------------------------------------------- */
 
 static uint8_t *ram_ref; /* RAM as set up, before any case ran */
+/* CR2, the debug registers and the MSRs as reset left them: a case can write
+   them, and load_case() puts them back. With the MSRs go the values a WRMSR
+   works out from them (the WinChip and C3 feature control registers set the
+   CPUID enable, the feature bits and which CR4 bits stick). */
+static uint32_t ref_cr2;
+static uint32_t ref_dr[8];
+static msr_t    ref_msr;
+static int      ref_cpuid;
+static uint32_t ref_cpu_features;
+static uint64_t ref_cr4_mask;
+static uint64_t ref_cr4_ignore;
 
 static void
 step(const char *what)
@@ -357,6 +368,14 @@ setup_machine(int softfloat, int fast_fpu_env)
     if (ram_ref == NULL)
         harness_fatal("no memory for the RAM reference");
     memcpy(ram_ref, ram, mem_size * 1024);
+
+    ref_cr2 = cr2;
+    memcpy(ref_dr, dr, sizeof(ref_dr));
+    ref_msr = msr;
+    ref_cpuid        = CPUID;
+    ref_cpu_features = cpu_features;
+    ref_cr4_mask     = cpu_CR4_mask;
+    ref_cr4_ignore   = cpu_CR4_ignore;
 }
 
 /* ---- case state ------------------------------------------------------ */
@@ -465,6 +484,17 @@ load_case(const harness_case_t *c, int with_code)
        that writes CR0 must not hand its bits to the next run. The cache
        flag and the wait states follow CD as they do after a MOV CR0. */
     cr0 = 0x00000031;
+    /* CR2, the debug registers and the MSRs as reset left them, before the
+       cache-as-RAM state below is worked out from the MTRRs. The armed
+       breakpoint flag follows DR7. */
+    cr2 = ref_cr2;
+    memcpy(dr, ref_dr, sizeof(ref_dr));
+    msr = ref_msr;
+    CPUID          = ref_cpuid;
+    cpu_features   = ref_cpu_features;
+    cpu_CR4_mask   = ref_cr4_mask;
+    cpu_CR4_ignore = ref_cr4_ignore;
+    cpu_dr7_update();
     cpu_cache_int_enabled = hascache && !(cr0 & (1 << 30));
     if (hascache)
         cpu_update_waitstates();
