@@ -52,6 +52,7 @@
 #include "386_common.h"
 #include "x86_flags.h"
 #include "codegen.h"
+#include "codegen_backend.h"
 
 #include "harness.h"
 
@@ -461,22 +462,21 @@ load_case(const harness_case_t *c, int with_code)
     mem_invalidate_range(HARNESS_STACK, HARNESS_STACK);
     mem_invalidate_range(HARNESS_RECORD, HARNESS_RECORD);
     /* The SMC thrash counts and cooldown deadlines as a reset machine has
-       them, on every page: a case may run code anywhere, and the strikes
-       earned by earlier runs would send a page to the interpreter in this
+       them, on every block: a case may run code anywhere, and the strikes
+       earned by earlier runs would send a block to the interpreter in this
        one. The blocks over the pages put back above, and over those the last
        capture put back, are dropped first: the run would drop them as it
        reached them and count their strikes after the clear. Every page is
-       flushed before any is cleared: a block dropped through the page it
-       runs into is charged to the page it starts on. */
+       flushed before any block is cleared. */
     for (uint32_t i = 0; i < pages_sz; i++) {
         page_t *page = &pages[i];
 
         if ((page->block || page->block_2) && page->dirty_mask)
             codegen_check_flush(page, page->dirty_mask, i << 12);
     }
-    for (uint32_t i = 0; i < pages_sz; i++) {
-        pages[i].smc_strikes        = 0;
-        pages[i].smc_cooldown_until = 0;
+    for (uint32_t i = 0; i < BLOCK_SIZE; i++) {
+        codeblock[i].smc_strikes        = 0;
+        codeblock[i].smc_cooldown_until = 0;
     }
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
     harness_ram_writer_addr = 0;

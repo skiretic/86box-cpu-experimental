@@ -68,7 +68,7 @@ extern int harness_verbose;
    so every comparison run starts from the same device state. */
 extern uint32_t harness_ram_writer_addr;
 
-extern void harness_fatal(const char *msg);
+extern void harness_fatal(const char *msg) __attribute__((noreturn));
 
 /* gen.c */
 extern void harness_gen_case(harness_case_t *c, uint64_t seed, uint32_t classes);

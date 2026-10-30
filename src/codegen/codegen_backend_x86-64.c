@@ -939,7 +939,8 @@ rx_epilogue(codeblock_t *block)
   In  - ECX (Windows) or EDI (System V) = source segment offset in cpu_state
         (bits 0-11), cycle limit (bits 12-23), cycles per element (bits 24-31)
   Out - EAX = 0 to carry on with the block, non-zero to leave it with
-        cpu_state.pc set back to the instruction
+        cpu_state.pc set back to the instruction, or left at the next one,
+        which the caller sets, after an SMI on the last element
   Preserves RBX, RBP and R12-R15; the caller saves RAX and RDX.
 
   Does what the interpreter's REP handlers in x86_ops_rep_dyn.h do: the same
@@ -962,10 +963,12 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     int32_t *to_break[2];
     int32_t *to_abort;
     int32_t *to_set_pc;
+    int32_t *to_smi;
     int32_t *branch;
     int32_t *branch2;
     void    *loop;
     void    *done_ret;
+    void    *set_pc;
 
     /*RSP is 8 off 16-byte alignment on entry; five pushes and the 32-byte
       home area align it for the call to elem_func*/
@@ -1174,6 +1177,11 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     rx_step_offset(block, RX_DST, RX_STEP, a32);
     rx_alu_ri(block, 0, 5, RX_CNT, 1);
     rx_rr(block, 0, 0, 0x29, RX_ELEMCYC, RX_CYCLES);
+    /*An element that raised an SMI (a trapped write) ends the instruction,
+      as the interpreter's loop does. Only these elements can: the runs copy
+      RAM through direct lookups, which nothing traps.*/
+    rx_testb_mi(block, REG_RBP, rx_state(&cpu_state._smi_line), 0xff);
+    to_smi = rx_jcc(block, RX_CC_NZ);
     rx_rr(block, 0, 0, 0x39, RX_END, RX_CYCLES);
     to_break[1] = rx_jcc(block, RX_CC_L);
     rx_patch(rx_jmp(block), loop);
@@ -1199,8 +1207,18 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     rx_writeback(block, is_stos, a32);
 
     rx_patch(to_set_pc, rx_here());
+    set_pc = rx_here();
     rx_rm(block, 0, 0, 0x8b, REG_RCX, REG_RBP, rx_state(&cpu_state.oldpc));
     rx_rm(block, 0, 0, 0x89, REG_RCX, REG_RBP, rx_state(&cpu_state.pc));
+    rx_mov_ri(block, REG_RAX, 1);
+    rx_epilogue(block);
+
+    /*SMI: leave the block for it, restarting the instruction if elements are
+      left, otherwise after it, where the caller has set cpu_state.pc*/
+    rx_patch(to_smi, rx_here());
+    rx_writeback(block, is_stos, a32);
+    rx_rr(block, 0, 0, 0x85, RX_CNT, RX_CNT);
+    rx_patch(rx_jcc(block, RX_CC_NZ), set_pc);
     rx_mov_ri(block, REG_RAX, 1);
     rx_epilogue(block);
 
@@ -1452,6 +1470,8 @@ build_link_routine(codeblock_t *block)
     lx_abs(block, 0, 0, 0x89, REG_RCX, &cpu_fetch_device);
     rx_rr(block, 0, 0, 0xff, 0, REG_RCX);                       /*INC ECX*/
     rx_rm(block, 0, 0, 0x88, REG_RCX, REG_RDI, LINK_BLOCK(used)); /*MOV block->used, CL*/
+    /*Linked entries bypass the dispatcher's SMC reuse countdown.*/
+    rx_rm(block, 0, 0, 0xd0, 5, REG_RDI, LINK_BLOCK(runs_left)); /*SHR byte, 1*/
     rx_bytes(block, jmp_r15, 3);
 
     /*Miss: the block's own epilogue, RAX still the slots*/

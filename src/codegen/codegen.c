@@ -22,7 +22,6 @@
 #include "codegen_ops.h"
 #include "codegen_ops_helpers.h"
 
-#define MAX_INSTRUCTION_COUNT 50
 static struct {
     uint32_t pc;
     int      op_ssegs;
@@ -1042,6 +1041,41 @@ codegen_fetch_reach(const codeblock_t *block, uint32_t addr, int len, uint32_t *
     return 0;
 }
 
+/*The MediaGX raises an SMI on a trapped VGA memory write (cpu_gxm_smi_mem)
+  and takes it after the instruction, as the interpreter does. Compiled code
+  looks at smi_line only between blocks, so on the MediaGX an instruction
+  that stores, or that runs through its interpreter handler, leaves the block
+  for a pending SMI before a later write can overwrite the trap's record.
+  Other SMIs come from I/O, which the I/O handlers return for, or from
+  memory-mapped stores (IOAPIC, LAPIC, OHCI on some chipsets), which
+  compiled code takes at the block end, as before.*/
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
+#    define codegen_smi_exits() is_gxm
+#else
+#    define codegen_smi_exits() 0
+#endif
+
+static int
+codegen_ir_stores(ir_data_t *ir, int first_uop)
+{
+    for (int c = first_uop; c < ir->wr_pos; c++) {
+        switch (ir->uops[c].type & UOP_MASK) {
+            case UOP_MEM_STORE_ABS & UOP_MASK:
+            case UOP_MEM_STORE_REG & UOP_MASK:
+            case UOP_MEM_STORE_IMM_8 & UOP_MASK:
+            case UOP_MEM_STORE_IMM_16 & UOP_MASK:
+            case UOP_MEM_STORE_IMM_32 & UOP_MASK:
+            case UOP_MEM_STORE_SINGLE & UOP_MASK:
+            case UOP_MEM_STORE_DOUBLE & UOP_MASK:
+                return 1;
+
+            default:
+                break;
+        }
+    }
+    return 0;
+}
+
 /* The instructions whose interpreter op can end the block on success, with
    a nonzero answer that leaves the block right after its call: a taken Jcc,
    LOOP or JCXZ, INT3, INT n, INTO and INT1, POP SS and MOV SS (they run the
@@ -1569,6 +1603,7 @@ generate_call:
         codegen_fpu_pointers_recorded = 0;
         codegen_instr_pc              = old_pc;
         codegen_fetch_walk_fpu        = is_fpu;
+        const int first_uop           = ir->wr_pos;
         new_pc = recomp_op_table[(opcode | op_32) & recomp_opcode_mask](block, ir, opcode, fetchdat, op_32, op_pc);
         codegen_fetch_walk_fpu = 0;
         /* The FPU's pointers for a compiled instruction, unless its handler
@@ -1577,6 +1612,15 @@ generate_call:
         if (new_pc && is_fpu && !codegen_fpu_pointers_recorded)
             codegen_fpu_record_pointers(ir);
         if (new_pc) {
+            /*An instruction that sets pc itself (-1) is a jump or call,
+              whose only store is to the stack, which nothing traps*/
+            if ((new_pc != -1) && codegen_smi_exits() && codegen_ir_stores(ir, first_uop)) {
+                /*The exit leaves the block here: charge the cycles of the
+                  instructions so far, this one included, as the interpreter
+                  does before it takes the SMI*/
+                codegen_accumulate_flush(ir);
+                uop_SMI_EXIT_IMM(ir, new_pc);
+            }
             if (new_pc != -1)
                 uop_MOV_IMM(ir, IREG_pc, new_pc);
 
@@ -1714,6 +1758,11 @@ codegen_skip:
     /*No softfloat exception check after the instruction: a pending #MF is
       raised by the next waiting FPU instruction (or WAIT), as the book says,
       and the no-wait ones (FNSTSW, FNSTCW, FNCLEX...) don't raise it*/
+    /*After the FPU environment update (recorded ahead of the call), so an
+      SMI taken on an x87 store leaves this instruction's pointers for
+      FNSTENV or FSAVE*/
+    if (codegen_smi_exits())
+        uop_SMI_EXIT(ir);
     codegen_flags_changed = 0;
     /* The handler gets the bytes after the opcode through fetchdat, and reads
        anything further from memory as it runs. Marking more than fetchdat
