@@ -79,6 +79,23 @@ machine_get_internal_name(void)
     return machines[0].internal_name;
 }
 
+/* The flat entry has no bus, so prefetch_run() keeps the ROM prefetch
+   multiply of every non-MCA machine. */
+int
+machine_has_bus(int m, uintptr_t bus_flags)
+{
+    return machines[m].bus_flags & bus_flags;
+}
+
+volatile int debugger_attached = 0;
+
+int
+debugger_instruction(int partial)
+{
+    (void) partial;
+    return 0;
+}
+
 int
 machine_at_cobalt3k_init(const machine_t *m)
 {
