@@ -2513,8 +2513,10 @@ svga_writeb_linear(uint32_t addr, uint8_t val, void *priv)
    raster-op) path. On an ISA or MCA card it crosses the bus once at the
    card's word/dword timing even though the card splits it into byte
    operations (a 32-bit write to a 16-bit card is two 16-bit bus cycles, not
-   four byte ones). On the other buses the word/dword timings were measured
-   on the linear path, so the slow path keeps one byte charge per byte. */
+   four byte ones). On the other buses a card's word/dword timing can be
+   below its byte timing (Rage 128 and Banshee: write_b 2, write_l 1), where
+   a single charge would make a dword cheaper than one byte, so the slow
+   path keeps one byte charge per byte. */
 static __inline int
 svga_slow_charge(const svga_t *svga, int timing, int timing_b, int nbytes)
 {
