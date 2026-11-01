@@ -12,6 +12,10 @@
  *          (debugger.c), which never calls a device's handlers: only the
  *          bytes on screen (and the page table entries that map them) are
  *          read, and memory only devices can answer for is shown, not read.
+ *
+ *          The hex pane omits addresses that are not mapped (classed
+ *          DEBUGGER_MEM_UNMAPPED), presenting only the mapped regions
+ *          contiguously.
  */
 #include "qt_memoryviewer.hpp"
 
@@ -53,6 +57,7 @@ extern "C" {
 #include <86box/86box.h>
 #include <86box/plat.h>
 #include <86box/debugger.h>
+#include <86box/mem.h>
 
 int startblit_timeout(int timeout_ms);
 }
@@ -110,10 +115,119 @@ MemoryHexView::MemoryHexView(QWidget *parent)
     updateScrollBar();
 }
 
+void
+MemoryHexView::rebuildMappedRanges()
+{
+    mappedRanges_.clear();
+    totalMappedBytes_ = 0;
+
+    if (!MemoryViewer::lock())
+        return;
+
+    const uint32_t PAGE = 4096;
+
+    if (space_ == DEBUGGER_SPACE_PHYSICAL) {
+        /* Physical: a page is mapped when either the read or write mapping
+           is present. Scanning the arrays is far cheaper than a million
+           debugger_mem_read calls. */
+        uint32_t rangeStart = 0;
+        bool     inRange    = false;
+        for (uint32_t g = 0; g < MEM_MAPPINGS_NO; g++) {
+            const bool mapped = (read_mapping[g] != nullptr) || (write_mapping[g] != nullptr);
+            const uint32_t page = g * PAGE;
+            if (mapped) {
+                if (!inRange) {
+                    rangeStart = page;
+                    inRange    = true;
+                }
+            } else if (inRange) {
+                MappedRange r;
+                r.start  = rangeStart;
+                r.length = page - rangeStart;
+                mappedRanges_.append(r);
+                totalMappedBytes_ += r.length;
+                inRange = false;
+            }
+        }
+        if (inRange) {
+            MappedRange r;
+            r.start  = rangeStart;
+            r.length = (uint32_t) (0x100000000ULL - rangeStart);
+            mappedRanges_.append(r);
+            totalMappedBytes_ += r.length;
+        }
+    } else {
+        /* Linear: a page is mapped when the page walk succeeds and the
+           resulting physical page is not UNMAPPED. */
+        uint32_t rangeStart = 0;
+        bool     inRange    = false;
+        for (uint64_t page = 0; page < 0x100000000ULL; page += PAGE) {
+            uint8_t data = 0;
+            uint8_t cls  = DEBUGGER_MEM_UNMAPPED;
+            debugger_mem_read(space_, (uint32_t) page, 1, &data, &cls);
+            const bool mapped = (cls != DEBUGGER_MEM_UNMAPPED);
+            if (mapped) {
+                if (!inRange) {
+                    rangeStart = (uint32_t) page;
+                    inRange    = true;
+                }
+            } else if (inRange) {
+                MappedRange r;
+                r.start  = rangeStart;
+                r.length = (uint32_t) page - rangeStart;
+                mappedRanges_.append(r);
+                totalMappedBytes_ += r.length;
+                inRange = false;
+            }
+        }
+        if (inRange) {
+            MappedRange r;
+            r.start  = rangeStart;
+            r.length = (uint32_t) (0x100000000ULL - rangeStart);
+            mappedRanges_.append(r);
+            totalMappedBytes_ += r.length;
+        }
+    }
+
+    MemoryViewer::unlock();
+}
+
+uint32_t
+MemoryHexView::virtualRowToAddr(int64_t virtualRow) const
+{
+    if (mappedRanges_.isEmpty() || virtualRow < 0)
+        return 0;
+
+    uint64_t offset = (uint64_t) virtualRow * BYTES_PER_ROW;
+    for (const auto &r : mappedRanges_) {
+        if (offset < r.length) {
+            return r.start + (uint32_t) offset;
+        }
+        offset -= r.length;
+    }
+    /* Past the end: return the end of the last range. */
+    const auto &last = mappedRanges_.last();
+    return last.start + last.length - 1;
+}
+
+int64_t
+MemoryHexView::addrToVirtualRow(uint32_t addr) const
+{
+    uint64_t bytesBefore = 0;
+    for (const auto &r : mappedRanges_) {
+        if (addr >= r.start && addr < r.start + r.length) {
+            uint64_t off = addr - r.start;
+            return (int64_t) ((bytesBefore + off) / BYTES_PER_ROW);
+        }
+        bytesBefore += r.length;
+    }
+    return -1; /* unmapped */
+}
+
 uint32_t
 MemoryHexView::topAddr() const
 {
-    return (uint32_t) verticalScrollBar()->value() * BYTES_PER_ROW;
+    return virtualRowToAddr(verticalScrollBar()->value());
 }
 
 int
@@ -126,9 +240,11 @@ MemoryHexView::visibleRows() const
 void
 MemoryHexView::updateScrollBar()
 {
-    const int total = (int) (0x100000000ULL / BYTES_PER_ROW);
-    verticalScrollBar()->setRange(0, total - visibleRows());
-    verticalScrollBar()->setPageStep(visibleRows());
+    const int64_t totalRows = (totalMappedBytes_ + BYTES_PER_ROW - 1) / BYTES_PER_ROW;
+    const int     vis       = visibleRows();
+    const int     maxVal    = (int) std::max<int64_t>(0, totalRows - vis);
+    verticalScrollBar()->setRange(0, maxVal);
+    verticalScrollBar()->setPageStep(vis);
     verticalScrollBar()->setSingleStep(1);
 
     const int width = charW_ * (10 + (BYTES_PER_ROW * 3) + 1 + 1 + BYTES_PER_ROW + 2);
@@ -141,6 +257,8 @@ MemoryHexView::setSpace(int space)
 {
     space_  = space;
     nibble_ = 0;
+    rebuildMappedRanges();
+    updateScrollBar();
     refresh();
 }
 
@@ -150,9 +268,14 @@ MemoryHexView::goTo(uint32_t addr)
     sel_    = addr;
     anchor_ = addr;
     nibble_ = 0;
-    const uint32_t row = addr / BYTES_PER_ROW;
+    int64_t vrow = addrToVirtualRow(addr);
+    if (vrow < 0) {
+        /* Unmapped; stay put or go to nearest? For now just select. */
+        refresh();
+        return;
+    }
     /* Put the address a few rows down from the top, for context. */
-    int64_t top = (int64_t) row - 2;
+    int64_t top = vrow - 2;
     verticalScrollBar()->setValue((int) std::clamp<int64_t>(top, 0, verticalScrollBar()->maximum()));
     refresh();
 }
@@ -160,31 +283,58 @@ MemoryHexView::goTo(uint32_t addr)
 void
 MemoryHexView::ensureVisible(uint32_t addr)
 {
-    const int64_t row = addr / BYTES_PER_ROW;
+    int64_t vrow = addrToVirtualRow(addr);
+    if (vrow < 0)
+        return;
     const int64_t top = verticalScrollBar()->value();
-    if (row < top)
-        verticalScrollBar()->setValue((int) row);
-    else if (row >= (top + visibleRows()))
-        verticalScrollBar()->setValue((int) std::min<int64_t>(row - visibleRows() + 1, verticalScrollBar()->maximum()));
+    if (vrow < top)
+        verticalScrollBar()->setValue((int) vrow);
+    else if (vrow >= (top + visibleRows()))
+        verticalScrollBar()->setValue((int) std::min<int64_t>(vrow - visibleRows() + 1, verticalScrollBar()->maximum()));
 }
 
 void
 MemoryHexView::refresh()
 {
-    const uint32_t start = topAddr();
-    const uint32_t len   = (uint32_t) std::min<uint64_t>((uint64_t) visibleRows() * BYTES_PER_ROW, 0x100000000ULL - start);
+    /* Safety net: if ranges were never built (or the lock failed earlier),
+       build them now so rows do not all collapse to address 0. */
+    if (mappedRanges_.isEmpty())
+        rebuildMappedRanges();
 
-    QVector<uint8_t> data(len);
-    QVector<uint8_t> cls(len);
+    const int64_t vtop = verticalScrollBar()->value();
+    const int     rows = visibleRows();
+
+    QVector<uint8_t> data;
+    QVector<uint8_t> cls;
+    data.reserve(rows * BYTES_PER_ROW);
+    cls.reserve(rows * BYTES_PER_ROW);
 
     if (!MemoryViewer::lock()) {
         emit status(tr("The emulator is busy; the memory view was not updated."));
         return;
     }
-    debugger_mem_read(space_, start, len, data.data(), cls.data());
+
+    uint32_t firstAddr = 0;
+    bool haveFirst = false;
+    for (int r = 0; r < rows; r++) {
+        uint32_t rowAddr = virtualRowToAddr(vtop + r);
+        if (!haveFirst) {
+            firstAddr = rowAddr;
+            haveFirst = true;
+        }
+        /* Read the 16 bytes of this row. */
+        uint8_t rowData[BYTES_PER_ROW];
+        uint8_t rowCls[BYTES_PER_ROW];
+        debugger_mem_read(space_, rowAddr, BYTES_PER_ROW, rowData, rowCls);
+        for (int i = 0; i < BYTES_PER_ROW; i++) {
+            data.append(rowData[i]);
+            cls.append(rowCls[i]);
+        }
+    }
+
     MemoryViewer::unlock();
 
-    cacheAddr_ = start;
+    cacheAddr_ = firstAddr;
     data_      = data;
     cls_       = cls;
     viewport()->update();
@@ -245,14 +395,14 @@ MemoryHexView::paintEvent(QPaintEvent *)
     p.fillRect(viewport()->rect(), pal.color(QPalette::Base));
     p.setFont(font());
 
+    const int64_t vtop = verticalScrollBar()->value();
+
     for (int r = 0; r < rows; r++) {
-        const uint64_t rowAddr = (uint64_t) cacheAddr_ + (uint64_t) r * BYTES_PER_ROW;
+        const uint32_t rowAddr = virtualRowToAddr(vtop + r);
         const int      y       = r * lineH_;
-        if (rowAddr > 0xffffffffULL)
-            break;
 
         p.setPen(pal.color(QPalette::Text));
-        p.drawText(xoff, y + ascent, QString::asprintf("%08X", (uint32_t) rowAddr));
+        p.drawText(xoff, y + ascent, QString::asprintf("%08X", rowAddr));
 
         for (int i = 0; i < BYTES_PER_ROW; i++) {
             const uint32_t idx = (uint32_t) (r * BYTES_PER_ROW + i);
@@ -296,7 +446,7 @@ MemoryHexView::paintEvent(QPaintEvent *)
                     break;
             }
 
-            const uint32_t addr = (uint32_t) rowAddr + i;
+            const uint32_t addr = rowAddr + i;
             if (addr >= selectionStart() && addr <= selectionEnd()) {
                 /* A translucent highlight, over whatever class was drawn. */
                 QColor selBg = pal.color(QPalette::Highlight);
@@ -341,10 +491,9 @@ MemoryHexView::hitTest(const QPoint &pos, uint32_t *addr) const
     if (col < 0)
         return 0;
 
-    const uint64_t a = (uint64_t) cacheAddr_ + (uint64_t) row * BYTES_PER_ROW + col;
-    if (a > 0xffffffffULL)
-        return 0;
-    *addr = (uint32_t) a;
+    const int64_t vtop = verticalScrollBar()->value();
+    const uint32_t rowAddr = virtualRowToAddr(vtop + row);
+    *addr = rowAddr + col;
     return 1;
 }
 
@@ -383,9 +532,26 @@ MemoryHexView::mouseReleaseEvent(QMouseEvent *event)
 void
 MemoryHexView::moveSelection(int64_t delta, bool extend)
 {
-    const int64_t a = std::clamp<int64_t>((int64_t) sel_ + delta, 0, 0xffffffffLL);
-    setSelection((uint32_t) a, extend);
-    ensureVisible(sel_);
+    /* Move in the dense virtual address space so navigation skips unmapped. */
+    int64_t vrow = addrToVirtualRow(sel_);
+    int     col  = sel_ % BYTES_PER_ROW;
+    if (vrow < 0) {
+        /* Currently on unmapped; snap to nearest mapped or stay. */
+        setSelection(sel_, extend);
+        return;
+    }
+    int64_t voff = vrow * BYTES_PER_ROW + col + delta;
+    if (voff < 0)
+        voff = 0;
+    uint64_t maxOff = totalMappedBytes_ - 1;
+    if ((uint64_t) voff > maxOff)
+        voff = (int64_t) maxOff;
+
+    int64_t newVrow = voff / BYTES_PER_ROW;
+    int     newCol  = (int) (voff % BYTES_PER_ROW);
+    uint32_t newAddr = virtualRowToAddr(newVrow) + newCol;
+    setSelection(newAddr, extend);
+    ensureVisible(newAddr);
 }
 
 void
@@ -781,7 +947,6 @@ MemoryViewer::MemoryViewer(QWidget *parent)
     disasm_->setRootIsDecorated(false);
     disasm_->setUniformRowHeights(true);
     disasm_->setFont(monoFont());
-    disasm_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     disasm_->setToolTip(tr("Double-click a line to set or clear a breakpoint there"));
     auto *disBox    = new QGroupBox(tr("Disassembly"), this);
     auto *disLayout = new QVBoxLayout(disBox);
@@ -846,6 +1011,9 @@ MemoryViewer::MemoryViewer(QWidget *parent)
     connect(timer_, &QTimer::timeout, this, &MemoryViewer::onPoll);
     timer_->start(100);
 
+    /* Build the mapped-range list for the initial (Physical) space before
+       the first goTo/refresh, otherwise every row collapses to address 0. */
+    hex_->setSpace(spaceBox_->itemData(0).toInt());
     hex_->goTo(0);
     refreshAll();
 }
@@ -968,17 +1136,38 @@ MemoryViewer::onPoll()
     }
 }
 
+/* What the disassembly shows, read under the lock. */
+struct MemoryViewer::DisasmView {
+    debugger_cpu_info_t info {};
+    QVector<DisasmInsn> lines;
+    QVector<bool>       bps;
+    uint32_t            segBase = 0;
+};
+
 void
 MemoryViewer::refreshAll()
 {
+    QString    cpu;
+    DisasmView view;
+    bool       haveCpu;
+    bool       haveDisasm;
+
+    /* One lock for every part, so they agree with each other; the widgets
+       are updated after it, as the emulator waits for as long as it is
+       held. */
     if (!lock()) {
         statusLabel_->setText(tr("The emulator is busy; the view was not updated."));
         return;
     }
     hex_->refresh();
-    refreshCpu();
-    refreshDisasm();
+    haveCpu    = readCpu(&cpu);
+    haveDisasm = readDisasm(&view);
     unlock();
+
+    if (haveCpu)
+        showCpu(cpu);
+    if (haveDisasm)
+        showDisasm(view);
     updateStatus();
 }
 
@@ -1016,83 +1205,105 @@ MemoryViewer::updateStatus()
     updateRunButton();
 }
 
-void
-MemoryViewer::refreshCpu()
+bool
+MemoryViewer::readCpu(QString *text)
 {
     QByteArray buf(4096, '\0');
 
     if (!lock())
-        return;
+        return false;
     debugger_cpu_format(buf.data(), buf.size());
     unlock();
 
+    *text = QString::fromLatin1(buf.constData());
+    return true;
+}
+
+void
+MemoryViewer::showCpu(const QString &text)
+{
     const int pos = cpuText_->verticalScrollBar()->value();
-    cpuText_->setPlainText(QString::fromLatin1(buf.constData()));
+    cpuText_->setPlainText(text);
     cpuText_->verticalScrollBar()->setValue(pos);
 }
 
 void
-MemoryViewer::refreshDisasm()
+MemoryViewer::refreshCpu()
+{
+    QString text;
+
+    if (readCpu(&text))
+        showCpu(text);
+}
+
+bool
+MemoryViewer::readDisasm(DisasmView *view)
 {
 #ifdef USE_DISASM
-    debugger_cpu_info_t info;
-    QVector<DisasmInsn> lines;
-    QVector<bool>       bps;
-    uint32_t            segBase = 0;
-
     if (!lock())
-        return;
-    debugger_cpu_info(&info);
+        return false;
+    debugger_cpu_info(&view->info);
     {
         Disassembler dis;
-        uint32_t     ip = followBox_->isChecked() ? info.ip : (disasmAddr_ - dis.csBase());
+        uint32_t     ip = followBox_->isChecked() ? view->info.ip : (disasmAddr_ - dis.csBase());
         if (!followBox_->isChecked() && dis.wraps() && (ip > 0xffff)) {
             /* Out of CS's reach where IP wraps at 64 KB: decode in the
                segment the address starts. */
             dis.setBase(disasmAddr_ & ~0x0f);
             ip = disasmAddr_ & 0x0f;
         }
-        segBase = dis.csBase();
+        view->segBase = dis.csBase();
         for (int i = 0; i < DISASM_LINES; i++) {
             /* The instruction at CS:IP may already be in the prefetch queue. */
-            DisasmInsn d = dis.decode(ip, (dis.csBase() == info.cs_base) && (ip == info.ip));
-            bps.append(debugger_breakpoint_present(d.lin));
-            lines.append(d);
+            DisasmInsn d = dis.decode(ip, (dis.csBase() == view->info.cs_base) && (ip == view->info.ip));
+            view->bps.append(debugger_breakpoint_present(d.lin));
+            view->lines.append(d);
             /* Past something unreadable, go on at the next byte. */
             ip = dis.next(ip, d.len);
         }
     }
     unlock();
+    return true;
+#else
+    (void) view;
+    return false;
+#endif
+}
+
+void
+MemoryViewer::showDisasm(const DisasmView &view)
+{
+    const debugger_cpu_info_t &info = view.info;
 
     if (followBox_->isChecked())
         disasmEdit_->setText(QString::asprintf("%04X:%0*X", info.cs_sel, info.code32 ? 8 : 4, info.ip));
 
     /* The rows are kept and rewritten, not made anew: a live update between
        the two clicks of a double-click (a breakpoint) would otherwise take
-       the row it started on away, and the double-click with it. */
-    while (disasm_->topLevelItemCount() > lines.size())
+       the row it started on away, and the double-click with it. Each cell
+       is set once, to what it shows: an unchanged value is not set again,
+       and so neither repaints nor resizes anything. */
+    while (disasm_->topLevelItemCount() > view.lines.size())
         delete disasm_->takeTopLevelItem(disasm_->topLevelItemCount() - 1);
-    while (disasm_->topLevelItemCount() < lines.size())
+    while (disasm_->topLevelItemCount() < view.lines.size())
         new QTreeWidgetItem(disasm_);
 
     QTreeWidgetItem *current = nullptr;
-    for (int n = 0; n < lines.size(); n++) {
-        const DisasmInsn &l    = lines[n];
-        QTreeWidgetItem  *item = disasm_->topLevelItem(n);
+    for (int n = 0; n < view.lines.size(); n++) {
+        const DisasmInsn &l         = view.lines[n];
+        QTreeWidgetItem  *item      = disasm_->topLevelItem(n);
+        const bool        isCurrent = (l.lin == info.pc_linear);
         QString           bytes;
-        for (int c = 0; c < 5; c++) {
-            item->setBackground(c, QBrush());
-            item->setForeground(c, QBrush());
-        }
         for (int i = 0; (i < l.len) && (i < 16); i++)
             bytes += QString::asprintf("%02X", l.bytes[i]);
 
-        item->setText(0, bps[n] ? QStringLiteral("\u25cf") : QString());
+        item->setText(0, view.bps[n] ? QStringLiteral("\u25cf") : QString());
         item->setForeground(0, QBrush(Qt::red));
-        if (segBase == info.cs_base)
+        item->setBackground(0, QBrush());
+        if (view.segBase == info.cs_base)
             item->setText(1, QString::asprintf("%08X  %04X:%0*X", l.lin, info.cs_sel, info.code32 ? 8 : 4, info.code32 ? l.ip : (l.ip & 0xffff)));
         else if (!info.protected_mode)
-            item->setText(1, QString::asprintf("%08X  %04X:%04X", l.lin, segBase >> 4, l.ip & 0xffff));
+            item->setText(1, QString::asprintf("%08X  %04X:%04X", l.lin, view.segBase >> 4, l.ip & 0xffff));
         else
             item->setText(1, QString::asprintf("%08X", l.lin));
         item->setData(1, Qt::UserRole, l.lin);
@@ -1101,21 +1312,37 @@ MemoryViewer::refreshDisasm()
         item->setText(4, l.note);
         item->setToolTip(3, l.note);
         item->setToolTip(4, l.note);
-        if (l.len <= 0)
-            item->setForeground(3, QBrush(unmappedFg));
-        else if (l.invalid)
-            item->setForeground(3, QBrush(inaccessibleBg));
-        if (l.lin == info.pc_linear) {
-            for (int c = 1; c < 5; c++) {
-                item->setBackground(c, palette().brush(QPalette::Highlight));
-                item->setForeground(c, palette().brush(QPalette::HighlightedText));
-            }
-            current = item;
+        for (int c = 1; c < 5; c++) {
+            QBrush fg;
+            if (isCurrent)
+                fg = palette().brush(QPalette::HighlightedText);
+            else if ((c == 3) && (l.len <= 0))
+                fg = QBrush(unmappedFg);
+            else if ((c == 3) && l.invalid)
+                fg = QBrush(inaccessibleBg);
+            item->setForeground(c, fg);
+            item->setBackground(c, isCurrent ? palette().brush(QPalette::Highlight) : QBrush());
         }
+        if (isCurrent)
+            current = item;
     }
+
+    /* Fitted once here, not by the header resizing to the contents: that
+       measures each column over all the rows again for every cell set
+       above, and took most of a second. */
+    for (int c = 0; c < disasm_->columnCount(); c++)
+        disasm_->resizeColumnToContents(c);
     if (current)
         disasm_->scrollToItem(current);
-#endif
+}
+
+void
+MemoryViewer::refreshDisasm()
+{
+    DisasmView view;
+
+    if (readDisasm(&view))
+        showDisasm(view);
 }
 
 /* Hex number, with an optional 0x prefix or h suffix. */
