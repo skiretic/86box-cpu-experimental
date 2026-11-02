@@ -7,6 +7,8 @@ name: CodeQL Analysis (Windows)
 
 on:
 
+  workflow_dispatch:
+
   push:
     branches: [ "master" ]
     paths:
