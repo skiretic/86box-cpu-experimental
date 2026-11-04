@@ -670,6 +670,7 @@ cpu_set(void)
     cpu_s         = (CPU *) &cpu_f->cpus[cpu_effective];
 
     soft_reset_pci    = 0;
+    soft_reset_387    = 0;
     cpu_init          = 0;
 
     cpu_alt_reset     = 0;
