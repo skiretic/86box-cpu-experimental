@@ -730,6 +730,64 @@ addwritelookup_remapped(uint32_t virt, uint32_t phys, uint32_t ram_addr)
     cycles -= 9;
 }
 
+/* The first code fetch after RESET on the Intel486 and the Am486DX/DX2:
+   A20M# is inactive at the falling edge of RESET, masks A20 no sooner than
+   4 clocks after it is asserted, and does not mask a prefetch already under
+   way (Intel486 data book 241731-002, p172 and p179-180; Am486DX/DX2
+   hardware reference manual 1993, p120 and p125). The first prefetch, the
+   line at FFFFFFF0h that holds the reset jump, therefore reaches the ROM
+   whatever the A20 gate says, opcodes and immediates alike.
+
+   The window is open from RESET until the first code fetch outside that
+   line. While it is open:
+   - no fetch of the line is cached (getpccache returns NULL), so every
+     fetch comes back to the closing test, and the caller's read goes
+     through the read handlers inside a fetch bracket (readmembl_fetch and
+     the others, 386_common.h: mem_a20_reset_line_fetch set for that one
+     call), which leaves the line unmasked (mem_read_rammask); an immediate
+     the interpreter reads through the data path is bracketed the same way
+     (readmemb_fetch);
+   - a data read of the line is masked: "If A20M# is asserted after the
+     ADS# of a data cycle, the A20 address signal is not masked during this
+     cycle but is masked in the next cycle" (p172), and the first bus cycle
+     is the code fetch (p180). Writes stay masked;
+   - the CPU loop interprets (CPU_OVERRIDE_RESET_LINE in
+     cpu_override_dynarec), so no block is compiled or looked up under the
+     masked physical address, even if the code clears CR0.CD. */
+int mem_a20_reset_line       = 0;
+int mem_a20_reset_line_fetch = 0;
+
+static void
+mem_a20_reset_line_close(void)
+{
+    mem_a20_reset_line = 0;
+    cpu_override_dynarec &= ~CPU_OVERRIDE_RESET_LINE;
+    pccache = (uint32_t) 0xffffffff;
+}
+
+void
+mem_a20_reset_line_arm(int open)
+{
+    if (open) {
+        mem_a20_reset_line = 1;
+        cpu_override_dynarec |= CPU_OVERRIDE_RESET_LINE;
+        /* No translation made before may serve the line. */
+        flush_read_lookup();
+        pccache = (uint32_t) 0xffffffff;
+    } else if (mem_a20_reset_line)
+        mem_a20_reset_line_close();
+}
+
+/* rammask for a read of linear address addr. */
+static __inline uint32_t
+mem_read_rammask(uint32_t addr)
+{
+    if (mem_a20_reset_line_fetch && mem_a20_reset_line && !(cr0 >> 31) && ((addr & 0xfffffff0U) == 0xfffffff0U))
+        return 0xffffffff;
+
+    return rammask;
+}
+
 uint8_t *
 getpccache(uint32_t a)
 {
@@ -738,6 +796,14 @@ getpccache(uint32_t a)
     uint32_t a2;
 
     a2 = a;
+
+    if (mem_a20_reset_line) {
+        if (!(cr0 >> 31) && ((a & 0xfffffff0U) == 0xfffffff0U)) {
+            cpu_fetch_device = 1;
+            return NULL;
+        }
+        mem_a20_reset_line_close();
+    }
 
     if (cr0 >> 31) {
         a64 = mmutranslate_read(a64);
@@ -870,7 +936,7 @@ readmembl(uint32_t addr)
         if (a > 0xffffffffULL)
             return 0xff;
     }
-    addr = (uint32_t) (addr64 & rammask);
+    addr = (uint32_t) (addr64 & mem_read_rammask(addr));
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
     if (map && map->read_b)
@@ -929,7 +995,7 @@ readmembl_no_mmut(uint32_t addr, uint32_t a64)
 
         addr = a64 & rammask;
     } else
-        addr &= rammask;
+        addr &= mem_read_rammask(addr);
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
     if (map && map->read_b)
@@ -1015,7 +1081,7 @@ readmemwl(uint32_t addr)
     } else
         addr64a[0] = (uint64_t) addr;
 
-    addr = addr64a[0] & rammask;
+    addr = addr64a[0] & mem_read_rammask(addr);
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
 
@@ -1142,7 +1208,7 @@ readmemwl_no_mmut(uint32_t addr, uint32_t *a64)
 
         addr = (uint32_t) (a64[0] & rammask);
     } else
-        addr &= rammask;
+        addr &= mem_read_rammask(addr);
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
 
@@ -1273,7 +1339,7 @@ readmemll(uint32_t addr)
             return 0xffffffff;
     }
 
-    addr = addr64a[0] & rammask;
+    addr = addr64a[0] & mem_read_rammask(addr);
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
 
@@ -1420,7 +1486,7 @@ readmemll_no_mmut(uint32_t addr, uint32_t *a64)
 
         addr = (uint32_t) (a64[0] & rammask);
     } else
-        addr &= rammask;
+        addr &= mem_read_rammask(addr);
 
     map = read_mapping[addr >> MEM_GRANULARITY_BITS];
 
