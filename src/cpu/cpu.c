@@ -445,11 +445,14 @@ cpu_init_keeps_state(void)
      (6x86 data book, pp. 3-6 and 3-9; 6x86MX data book, pp. 3-6 and 3-9;
      MII data book, Feb 1999, pp. 3-6 and 3-9); for the 6x86L, Application
      Note 102, May 1997, pin AA33 and 3.3: "the floating point registers
-     remain unchanged".
-   The books of the others (Cyrix 486 and 5x86, the IDT WinChip, IBM's
-   486s, the ST STPC, the RapidCAD, the K6-2+ and K6-III, the VIA Cyrix III)
-   give no FPU state for it, and they keep the reset the soft FPU has always
-   given them. */
+     remain unchanged";
+   - the VIA Cyrix III (Samuel): INIT# "resets integer registers and does
+     not affect internal cache or floating point registers" (VIA Cyrix III
+     Processor Datasheet, Nov 2000, v1.2, pin descriptions).
+   The others keep the reset the soft FPU has always given them: the CPUs
+   for which no book at hand gives the FPU state after a soft reset (Cyrix
+   486 and 5x86, the IDT WinChip, IBM's 486s, the ST STPC, the RapidCAD,
+   the K6-2+ and K6-III). */
 int
 cpu_soft_reset_keeps_fpu(void)
 {
@@ -475,6 +478,7 @@ cpu_soft_reset_keeps_fpu(void)
         case CPU_Cx6x86:
         case CPU_Cx6x86L:
         case CPU_Cx6x86MX:
+        case CPU_CYRIX3S:
             return 1;
         default:
             return 0;
