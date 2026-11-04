@@ -13,7 +13,8 @@
  *          instruction, and EBX, ESP, ESI and EDI are never written by
  *          anything else, so a case stays inside its pages. Faults are
  *          allowed (a DIV by zero, an unmasked x87 exception): the
- *          handler records them and both paths must agree.
+ *          handler records them and both paths must agree. Only what the
+ *          selected CPU and FPU have is drawn (harness_model).
  */
 #include <inttypes.h>
 #include <math.h>
@@ -40,6 +41,19 @@ static uint32_t
 rnd_below(uint32_t n)
 {
     return rnd() % n;
+}
+
+/* rnd_below(n), drawn again while it is one the CPU lacks (bit k of lacks
+   set for k): with nothing lacking, the same draw as rnd_below(n). */
+static uint32_t
+rnd_below_but(uint32_t n, uint32_t lacks)
+{
+    uint32_t r;
+
+    do {
+        r = rnd_below(n);
+    } while ((lacks >> r) & 1);
+    return r;
 }
 
 static int
@@ -263,7 +277,7 @@ gen_mov(emit_t *e)
             modrm_mem(e, dest_reg(e));
             break;
         default: /* bswap, cdq, cwde */
-            switch (rnd_below(3)) {
+            switch (rnd_below_but(3, harness_model.bswap ? 0 : 1)) {
                 case 0:
                     e8(e, 0x0f);
                     e8(e, 0xc8 + dest_reg(e));
@@ -377,7 +391,7 @@ gen_flags(emit_t *e, uint32_t classes)
 {
     int cc = rnd_below(16);
 
-    switch (rnd_below(10)) {
+    switch (rnd_below_but(10, harness_model.cmov ? 0 : (1 << 1))) {
         case 0: /* setcc r/m8 */
             e8(e, 0x0f);
             e8(e, 0x90 + cc);
@@ -548,7 +562,7 @@ gen_x87(emit_t *e)
 {
     int i = rnd_below(8);
 
-    switch (rnd_below(24)) {
+    switch (rnd_below_but(24, harness_model.fcmov ? 0 : ((1 << 14) | (1 << 15)))) {
         case 0: /* fld m32 / m64 / m80 */
             switch (rnd_below(3)) {
                 case 0: e8(e, 0xd9); modrm_mem(e, 0); break;
@@ -634,11 +648,11 @@ gen_x87(emit_t *e)
             {
                 static const uint8_t ops[14] = { 0xfa, 0xfc, 0xfd, 0xf8, 0xf5, 0xf4, 0xf0, 0xf1, 0xf2, 0xf3, 0xf9, 0xfb, 0xfe, 0xff };
                 e8(e, 0xd9);
-                e8(e, ops[rnd_below(14)]);
+                e8(e, ops[rnd_below_but(14, harness_model.x87_387 ? 0 : ((1 << 4) | (1 << 11) | (1 << 12) | (1 << 13)))]); /* fprem1 fsincos fsin fcos */
             }
             break;
         case 13: /* fucom fucomp fucompp fcom fcomp fcompp */
-            switch (rnd_below(6)) {
+            switch (rnd_below_but(6, harness_model.x87_387 ? 0 : 7)) {
                 case 0: e8(e, 0xdd); e8(e, 0xe0 + i); break;
                 case 1: e8(e, 0xdd); e8(e, 0xe8 + i); break;
                 case 2: e8(e, 0xda); e8(e, 0xe9); break;

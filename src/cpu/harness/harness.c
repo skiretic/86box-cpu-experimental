@@ -18,8 +18,9 @@
  *          every gate lands on a handler that records the vector and
  *          halts, a stack page, a data page and a code page. The blob
  *          sits between a prelude and an epilogue that bracket it with
- *          RDTSC and end in HLT; the driver runs cycle slices until the
- *          CPU halts.
+ *          RDTSC (an OUT to the harness's TSC device on a CPU without it)
+ *          and end in HLT; the driver runs cycle slices until the CPU
+ *          halts.
  *
  *          Architectural state (registers, flags, segments, x87, MMX, the
  *          data page, the fault record) must agree between every run.
@@ -236,11 +237,18 @@ static const uint8_t op_mov_edx_m[] = { 0x8b, 0x15 }; /* mov edx, [disp32] */
 static const uint8_t op_sub_eax_m[] = { 0x2b, 0x05 }; /* sub eax, [disp32] */
 static const uint8_t op_sbb_edx_m[] = { 0x1b, 0x15 }; /* sbb edx, [disp32] */
 
+/* Without RDTSC the TSC device takes the times: OUT imm8, AL changes no
+   register and no flag, so the prelude and the epilogue need nothing else. */
 static int
 emit_prelude(uint8_t *p, int mode16)
 {
     int n = 0;
 
+    if (!harness_model.rdtsc) {
+        p[n++] = 0xe6; /* out HARNESS_PORT_TSC_START, al */
+        p[n++] = HARNESS_PORT_TSC_START;
+        return n;
+    }
     n += emit_mem_op(p + n, mode16, op_mov_m_eax, 1, HARNESS_RECORD + REC_SAVE_EAX);
     n += emit_mem_op(p + n, mode16, op_mov_m_edx, 2, HARNESS_RECORD + REC_SAVE_EDX);
     p[n++] = 0x0f; p[n++] = 0x31; /* rdtsc */
@@ -256,6 +264,12 @@ emit_epilogue(uint8_t *p, int mode16)
 {
     int n = 0;
 
+    if (!harness_model.rdtsc) {
+        p[n++] = 0xe6; /* out HARNESS_PORT_TSC_END, al */
+        p[n++] = HARNESS_PORT_TSC_END;
+        p[n++] = 0xf4; /* hlt */
+        return n;
+    }
     if (mode16)
         p[n++] = 0x66;
     p[n++] = 0x9c; /* pushfd */
@@ -273,6 +287,39 @@ emit_epilogue(uint8_t *p, int mode16)
     p[n++] = 0x9d; /* popfd */
     p[n++] = 0xf4; /* hlt */
     return n;
+}
+
+/* The TSC device's OUT: the time as RDTSC reads it, the recompiler's block
+   cycles so far first (opRDTSC), and the record page written as the RDTSC
+   prelude and epilogue write it. */
+void
+harness_tsc_port(uint16_t port)
+{
+    uint64_t t;
+
+    if (cpu_use_dynarec)
+        update_tsc();
+    t = tsc;
+    if (port == HARNESS_PORT_TSC_END) {
+        t -= get32(HARNESS_RECORD + REC_TSC_START) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_START + 4) << 32);
+        mem_writel_phys(HARNESS_RECORD + REC_TSC_DELTA, (uint32_t) t);
+        mem_writel_phys(HARNESS_RECORD + REC_TSC_DELTA + 4, (uint32_t) (t >> 32));
+    } else {
+        mem_writel_phys(HARNESS_RECORD + REC_TSC_START, (uint32_t) t);
+        mem_writel_phys(HARNESS_RECORD + REC_TSC_START + 4, (uint32_t) (t >> 32));
+    }
+}
+
+/* IRQ 13, which FERR# raises with CR0.NE clear (a 386): served at once, as
+   a write to port F0h serves it, whose board latch asserts IGNNE# while
+   FERR# is up (cpu.c, cpu_write). There is no interrupt controller here to
+   deliver it, and the waiting instruction FERR# holds would be restarted
+   forever without a cycle charged, so the slice would never end. */
+void
+harness_irq13(void)
+{
+    if (fpu_ferr)
+        fpu_ignne = 1;
 }
 
 /* ---- machine --------------------------------------------------------- */
@@ -298,13 +345,75 @@ step(const char *what)
         fprintf(stderr, "harness: %s\n", what);
 }
 
-/* The machine: the 600 MHz Deschutes with its internal FPU and the 486
-   debug registers option off, unless --cpu, --fpu-type or --dbg486 say
-   otherwise. */
+/* The machine: the 600 MHz Deschutes and the 486 debug registers option
+   off, unless --cpu or --dbg486 say otherwise. The FPU is the CPU's own
+   where its table entry has one, else the last coprocessor the entry lists
+   (the 387 on a 386), unless --fpu-type says otherwise. */
 static char machine_family[64]   = "pentium2_deschutes";
 static char machine_cpu_name[32] = "600";
-static int  machine_fpu_type     = FPU_INTERNAL;
+static int  machine_fpu_type     = -1;
 static int  machine_dbg486       = 0;
+
+harness_model_t harness_model;
+
+/* CPUID function 1's EDX as the CPU answers it, 0 for a CPU without CPUID.
+   A CPUID can set MSR state (the Pentium II's BIOS signature): the MSRs
+   and the registers are put back. */
+static uint32_t
+model_cpuid_edx(void)
+{
+    x86reg   regs[4];
+    msr_t    msr_before = msr;
+    uint32_t edx        = 0;
+
+    if (!CPUID)
+        return 0;
+    memcpy(regs, cpu_state.regs, sizeof(regs));
+    EAX = 0;
+    cpu_CPUID();
+    if (EAX >= 1) {
+        EAX = 1;
+        ECX = 0;
+        cpu_CPUID();
+        edx = EDX;
+    }
+    memcpy(cpu_state.regs, regs, sizeof(regs));
+    msr = msr_before;
+    return edx;
+}
+
+/* What the instruction sets in the CPUs' books add, by the CPU table's
+   type and features. RDTSC and MMX as the interpreter tests them. BSWAP
+   is "not available on Intel386 DX or SX microprocessors" (Intel486 PRM
+   1992, 3.11); it is drawn from the 486 class on where the part's own book
+   lists it (Intel486, Am486, Pentium and its OverDrive's "true Pentium
+   processor core", 6x86, 6x86MX, K5, K6, GX1, Pentium Pro and later),
+   and not for the Cx486S, Cx486DX, STPC, Cx5x86, WinChip and Cyrix III,
+   whose books here do not list their instructions. CMOVcc,
+   FCMOVcc and FCOMI from CPUID's CMOV flag, which "supports the CMOVcc
+   instruction and, if the FPU feature flag (bit 0) is also set, supports
+   the FCMOVcc and FCOMI instructions" (SDM 1999 vol. 2, CPUID). The GXm
+   sets the CMOV flag for the integer moves only: its extended CPUID gives
+   "FPU Conditional Move Instruction" as not supported (GXm data book,
+   Table 9-23), so it gets no FCMOVcc or FCOMI. FUCOM(P)(P), FPREM1, FSIN,
+   FCOS and FSINCOS "do not exist" on the 8087 and 80287 (80387 PRM 1987,
+   appendix D); the 287XL "supports all 80387 instructions" (Intel287 XL/XLT
+   data sheet 1992). */
+static void
+model_probe(void)
+{
+    const int      type = cpu_s->cpu_type;
+    const uint32_t edx  = model_cpuid_edx();
+
+    harness_model.rdtsc   = !!cpu_has_feature(CPU_FEATURE_RDTSC);
+    harness_model.mmx     = !!cpu_has_feature(CPU_FEATURE_MMX);
+    harness_model.bswap   = (type >= CPU_i486SX) && (type != CPU_Cx486S) && (type != CPU_Cx486DX) && (type != CPU_STPC) &&
+                            (type != CPU_Cx5x86) && (type != CPU_WINCHIP) && (type != CPU_WINCHIP2) && (type != CPU_CYRIX3S);
+    harness_model.cmov    = !!(edx & (1 << 15)); /* CMOV */
+    harness_model.fcmov   = harness_model.cmov && (edx & 1) && hasfpu && (type != CPU_CxGX1); /* and FPU */
+    harness_model.x87     = hasfpu;
+    harness_model.x87_387 = hasfpu && (fpu_type >= FPU_287XL);
+}
 
 static void
 setup_machine(int softfloat, int fast_fpu_env)
@@ -328,6 +437,16 @@ setup_machine(int softfloat, int fast_fpu_env)
         exit(2);
     }
     cpu                = n;
+    if (machine_fpu_type < 0) {
+        const FPU *fpus = cpus[n].fpus;
+
+        machine_fpu_type = FPU_NONE;
+        for (int i = 0; fpus[i].name; i++) {
+            machine_fpu_type = fpus[i].type;
+            if (machine_fpu_type == FPU_INTERNAL)
+                break;
+        }
+    }
     fpu_type           = machine_fpu_type;
     cpu_debug_regs_486 = machine_dbg486;
     fpu_softfloat      = softfloat;
@@ -360,6 +479,7 @@ setup_machine(int softfloat, int fast_fpu_env)
 #endif
     step("resetx86");
     resetx86();
+    model_probe();
 
     step("tables");
     build_tables();
@@ -381,8 +501,10 @@ setup_machine(int softfloat, int fast_fpu_env)
 
 /* ---- case state ------------------------------------------------------ */
 
-static uint8_t code_image[HARNESS_PAGE];
-static int     code_len;
+static uint8_t  code_image[HARNESS_PAGE];
+static int      code_len;
+static uint32_t body_start; /* the body's first byte, linear */
+static uint32_t body_end;   /* the epilogue's first byte */
 
 static void
 build_code(const harness_case_t *c)
@@ -391,8 +513,10 @@ build_code(const harness_case_t *c)
 
     memset(code_image, 0xf4, sizeof(code_image)); /* HLT past the end */
     n += emit_prelude(code_image + n, c->mode16);
+    body_start = HARNESS_CODE + n;
     memcpy(code_image + n, c->body, c->body_len);
     n += c->body_len;
+    body_end = HARNESS_CODE + n;
     n += emit_epilogue(code_image + n, c->mode16);
     code_len = n;
 }
@@ -494,14 +618,14 @@ load_case(const harness_case_t *c, int with_code)
     cpu_state.eflags   = 0;
 
     /* PE, and NE so an unmasked x87 exception is #MF through the IDT.
-       With NE clear it is FERR# and IRQ13, and with no PIC here the
-       waiting instruction would stall forever. CD and NW, set by reset,
-       cleared: the dynarec loop interprets every block while CD is set
-       and would never run compiled code. ET as reset sets it; MP, EM, TS,
+       With NE clear it is FERR# and IRQ13 (harness_irq13). CD and NW, set
+       by reset, cleared: the dynarec loop interprets every block while CD
+       is set and would never run compiled code. ET as reset sets it; MP, EM, TS,
        WP, AM and PG clear. The whole register is set, not merged: a case
        that writes CR0 must not hand its bits to the next run. The cache
-       flag and the wait states follow CD as they do after a MOV CR0. */
-    cr0 = 0x00000031;
+       flag and the wait states follow CD as they do after a MOV CR0. A
+       386 has no NE: it keeps only what a MOV CR0 would keep. */
+    cr0 = cpu_cr0_write_value(0x00000031);
     /* CR2, the debug registers and the MSRs as reset left them, before the
        cache-as-RAM state below is worked out from the MTRRs. The armed
        breakpoint flag follows DR7. */
@@ -893,8 +1017,30 @@ blocks_sig(void)
     return page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
 }
 
+/* The EIP the run's fault was taken at, from the frame its handler left on
+   the stack (past the error code for the vectors that push one), or
+   0xffffffff with no fault or no frame to read. Read before the next run
+   reloads the stack page. */
+static uint32_t
+fault_eip(void)
+{
+    const uint32_t vector = get32(HARNESS_RECORD + REC_VECTOR);
+    uint32_t       addr   = stack32 ? ESP : (ESP & 0xffff);
+
+    if (vector == 0xffffffff)
+        return 0xffffffff;
+    if ((vector == 8) || ((vector >= 10) && (vector <= 14)) || (vector == 17))
+        addr += 4;
+    addr += cpu_state.seg_ss.base;
+    if (addr > (mem_size * 1024) - 4)
+        return 0xffffffff;
+    return get32(addr);
+}
+
 /* Returns 0 when every run agrees, else a bit set: 1 state, 2 timing, 4 a
-   generated body wrote its code page. */
+   generated body wrote its code page, 8 the harness's own code faulted or a
+   generated body took #UD; and 16, not a failure, when the case ran none of
+   its body (it was empty, faulted on its first instruction, or reset). */
 static int
 run_case(const harness_case_t *c)
 {
@@ -903,6 +1049,9 @@ run_case(const harness_case_t *c)
     int                    compiled  = 0; /* the first run that changed no block */
     int                    converged = 0;
     int                    wrote_code = 0; /* 1 + the first run that changed the code page */
+    int                    harness_fault = 0; /* 1 the prelude or epilogue faulted, 2 a generated body took #UD */
+    int                    no_body   = 0;
+    uint32_t               eip0;
     int                    result    = 0;
 
     cur_case = c;
@@ -923,6 +1072,28 @@ run_case(const harness_case_t *c)
     step("run interpreter");
     st[0].status = run_until_halt(0);
     capture(&st[0], st[0].status);
+
+    /* The prelude and the epilogue must run clean, and a generated body
+       uses only what the CPU has: a fault in the harness's own code, or a
+       #UD from the generator's, is a harness defect, and no run of it tests
+       anything. An empty body, a fault at the body's first byte, or a reset,
+       ran none of it. */
+    eip0 = fault_eip();
+    no_body = !c->body_len;
+    if (st[0].status == RUN_RESET)
+        no_body = 1;
+    else if (eip0 != 0xffffffff) {
+        const uint32_t code_end = HARNESS_CODE + code_len;
+
+        if ((eip0 >= HARNESS_CODE) && (eip0 < body_start))
+            harness_fault = 1;
+        else if (((eip0 > body_end) || ((eip0 == body_end) && !c->body_len)) && (eip0 < code_end))
+            harness_fault = 1;
+        else if (c->generated && (st[0].vector == 6))
+            harness_fault = 2;
+        if ((eip0 >= HARNESS_CODE) && (eip0 <= body_start))
+            no_body = 1;
+    }
 
     /* Recompiler runs until one changes no block: a straight-line body
        compiles one more block per run, as each block is marked on the run
@@ -961,14 +1132,14 @@ run_case(const harness_case_t *c)
     }
 
     if (quiet) {
-        int bad = !converged || wrote_code;
+        int bad = !converged || wrote_code || harness_fault;
         for (int r = 1; r < nruns && !bad; r++)
             bad = compare_silent(&st[0], &st[r]);
         if (!bad && st[compiled + 1].tsc_delta != st[compiled].tsc_delta)
             bad = 1;
         if (!bad) {
             cur_case = NULL;
-            return 0;
+            return no_body ? 16 : 0;
         }
     }
 
@@ -991,6 +1162,13 @@ run_case(const harness_case_t *c)
                st[wrote_code - 1].code_bytes, st[wrote_code - 1].code_first);
         result |= 4;
     }
+    if (harness_fault == 1) {
+        printf("\n  FAULTS IN THE HARNESS CODE: vector %02x at %08x, body %08x-%08x\n", st[0].vector, eip0, body_start, body_end);
+        result |= 8;
+    } else if (harness_fault) {
+        printf("\n  TAKES #UD at %08x: the generator drew an instruction this CPU lacks\n", eip0);
+        result |= 8;
+    }
     if (!result)
         printf("ok (%s", status_names[st[0].status]);
     else
@@ -1010,7 +1188,7 @@ run_case(const harness_case_t *c)
         dump_case_hex(c);
     }
     cur_case = NULL;
-    return result;
+    return result | (no_body ? 16 : 0);
 }
 
 /* ---- case sources ---------------------------------------------------- */
@@ -1066,7 +1244,8 @@ usage(void)
             "  --nolink             block linking off\n"
             "  --cpu <family:name>  the CPU table entry, internal family name and CPU name\n"
             "                       (default pentium2_deschutes:600)\n"
-            "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default FPU_INTERNAL)\n"
+            "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default the CPU's own\n"
+            "                       FPU, else the last coprocessor its table entry lists)\n"
             "  --dbg486             the 486 debug registers option on\n"
             "  --passes <n>         at most n recompiler runs after the interpreter run (default %d:\n"
             "                       mark pass, compile passes until one compiles nothing, compiled 2)\n"
@@ -1091,6 +1270,9 @@ main(int argc, char **argv)
     uint32_t        classes    = GEN_ALL;
     int             failures   = 0;
     int             code_writers = 0;
+    int             harness_faults = 0;
+    int             gen_total  = 0;
+    int             gen_no_body = 0;
     int             total      = 0;
     int             r;
 
@@ -1184,12 +1366,27 @@ main(int argc, char **argv)
     if (nolink)
         cpu_dyn_block_link = 0;
 
+    /* All the classes means all this CPU has; a class it lacks, asked for
+       by name, is refused. */
+    {
+        uint32_t lacks = (harness_model.x87 ? 0 : GEN_X87) | (harness_model.mmx ? 0 : GEN_MMX);
+
+        if (have_seeds && (classes & lacks)) {
+            if (classes != GEN_ALL) {
+                fprintf(stderr, "--class asks for %s, which this CPU and FPU lack\n", (classes & lacks & GEN_X87) ? "x87" : "mmx");
+                return 2;
+            }
+            classes &= ~lacks;
+        }
+    }
+
     if (have_body) {
         c->mode16 = mode16;
         total++;
         r = run_case(c);
         failures += !!(r & 3);
         code_writers += !!(r & 4);
+        harness_faults += !!(r & 8);
     }
     if (have_seeds) {
         for (uint64_t s = seed_a; s <= seed_b; s++) {
@@ -1201,10 +1398,18 @@ main(int argc, char **argv)
             r = run_case(c);
             failures += !!(r & 3);
             code_writers += !!(r & 4);
+            harness_faults += !!(r & 8);
+            gen_total++;
+            gen_no_body += !!(r & 16);
         }
     }
 
     printf("%d case%s, %d with differences, %d write their code page\n", total, total == 1 ? "" : "s", failures, code_writers);
+    /* A sweep that ran nothing must not read as a pass. */
+    if (harness_faults)
+        printf("HARNESS DEFECT: %d case%s faulted in the prelude or epilogue or took #UD from the generator\n", harness_faults, harness_faults == 1 ? "" : "s");
+    if (gen_no_body * 2 > gen_total)
+        printf("VACUOUS: %d of %d generated cases, more than half, ran none of their body\n", gen_no_body, gen_total);
     free(c);
-    return (failures || code_writers) ? 1 : 0;
+    return (failures || code_writers || harness_faults || (gen_no_body * 2 > gen_total)) ? 1 : 0;
 }

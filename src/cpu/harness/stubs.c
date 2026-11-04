@@ -10,7 +10,8 @@
  *          memory layer reach for in the rest of the emulator, as stubs.
  *          No device, no interrupt source, no I/O: every port reads as
  *          open bus and every write is dropped, except the RAM writer at
- *          ports 0xe0-0xeb (outb/outw/outl below).
+ *          ports 0xe0-0xeb (outb/outw/outl below) and the TSC device at
+ *          0xec-0xed (harness.c).
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -243,6 +244,8 @@ outb(uint16_t port, uint8_t val)
 {
     if (port == 0xe4)
         mem_writeb_phys(harness_ram_writer_addr, val);
+    else if ((port == HARNESS_PORT_TSC_START) || (port == HARNESS_PORT_TSC_END))
+        harness_tsc_port(port);
 }
 
 void
@@ -266,10 +269,10 @@ outl(uint16_t port, uint32_t val)
 void
 picint_common(uint16_t num, int level, int set, uint8_t *irq_state)
 {
-    (void) num;
     (void) level;
-    (void) set;
     (void) irq_state;
+    if ((num & (1 << 13)) && set)
+        harness_irq13();
 }
 
 int

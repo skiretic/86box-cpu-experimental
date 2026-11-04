@@ -63,6 +63,30 @@ typedef struct harness_case_t {
     char     label[128]; /* what the generator drew, for the report */
 } harness_case_t;
 
+/* What the selected CPU and FPU have, as the harness and the generator use
+   it: the prelude and the epilogue read the TSC with RDTSC only where the
+   CPU has it, and the generator draws only what the model has. */
+typedef struct harness_model_t {
+    int rdtsc;   /* RDTSC */
+    int bswap;   /* BSWAP */
+    int cmov;    /* CMOVcc */
+    int fcmov;   /* FCMOVcc and FCOMI(P)/FUCOMI(P) */
+    int mmx;     /* MMX */
+    int x87;     /* an FPU */
+    int x87_387; /* the 387's additions: FUCOM(P)(P), FPREM1, FSIN, FCOS, FSINCOS */
+} harness_model_t;
+
+extern harness_model_t harness_model;
+
+/* The TSC device, for a CPU without RDTSC: an OUT to the first port takes
+   the start time, an OUT to the second the time since then, both as RDTSC
+   would read them, into the record page. */
+#define HARNESS_PORT_TSC_START 0xec
+#define HARNESS_PORT_TSC_END   0xed
+
+extern void harness_tsc_port(uint16_t port);
+extern void harness_irq13(void);
+
 extern int harness_verbose;
 /* The RAM writer device's latched address (stubs.c); load_case() clears it
    so every comparison run starts from the same device state. */
