@@ -630,6 +630,7 @@ extern int cpu_throttle_period;
 extern int cpu_throttle_break;
 extern int cpu_is_p5(void);
 extern int cpu_init_keeps_state(void);
+extern int cpu_soft_reset_keeps_fpu(void);
 
 extern uint16_t cpu_cur_status;
 
