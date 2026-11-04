@@ -434,6 +434,11 @@ cpu_init_keeps_state(void)
      TRM 18524C, INIT; AMD-K6 data sheet 20695E, Table 28 note 3; AMD-K6-2
      data sheet 21850, Table 32 note 3);
    - the P54C, P55C and the P6 family: INIT (cpu_init_keeps_state);
+   - the Pentium OverDrive (P24T): a board built for it ties its INIT to
+     the SRESET pin (Intel OverDrive Processors 290436-006, Table B-4), and
+     INIT leaves the floating point registers; a RESET without self-test
+     does not alter them either (Pentium OverDrive data sheet 290544-001,
+     8.2 and Table 8-2);
    - the Cyrix 6x86, 6x86L, 6x86MX and MII: the socket's INIT pin is their
      WM_RST, and "WM_RST does not change the state of the configuration
      registers, the on-chip cache, the write buffers and the FPU registers"
@@ -442,9 +447,9 @@ cpu_init_keeps_state(void)
      Note 102, May 1997, pin AA33 and 3.3: "the floating point registers
      remain unchanged".
    The books of the others (Cyrix 486 and 5x86, the IDT WinChip, IBM's
-   486s, the ST STPC, the RapidCAD, the Pentium OverDrive, the K6-2+ and
-   K6-III, the VIA Cyrix III) give no FPU state for it, and they keep the
-   reset the soft FPU has always given them. */
+   486s, the ST STPC, the RapidCAD, the K6-2+ and K6-III, the VIA Cyrix III)
+   give no FPU state for it, and they keep the reset the soft FPU has always
+   given them. */
 int
 cpu_soft_reset_keeps_fpu(void)
 {
@@ -461,6 +466,7 @@ cpu_soft_reset_keeps_fpu(void)
         case CPU_Am486DX:
         case CPU_Am486DXL:
         case CPU_ENH_Am486DX:
+        case CPU_P24T:
         case CPU_K5:
         case CPU_5K86:
         case CPU_K6:
