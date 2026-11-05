@@ -58,6 +58,10 @@ __thread int is_cpu_thread = 1;
 
 uint8_t io_turbo_map[65536 >> 3];
 
+/* cpu_set() writes the I/O delay (pit.c's globals). */
+int io_delay       = 5;
+int io_delay_multi = 0;
+
 pic_t pic;
 pic_t pic2;
 int   cascade = 0;
@@ -111,6 +115,20 @@ machine_at_nupro592_init(const machine_t *m)
 
 int
 machine_at_tandy_vis_init(const machine_t *m)
+{
+    (void) m;
+    return 0;
+}
+
+int
+machine_xt_ibm5550_init(const machine_t *m)
+{
+    (void) m;
+    return 0;
+}
+
+int
+machine_xt_ibm5535_init(const machine_t *m)
 {
     (void) m;
     return 0;
