@@ -88,8 +88,6 @@ machine_has_bus(int m, uintptr_t bus_flags)
     return machines[m].bus_flags & bus_flags;
 }
 
-volatile int debugger_attached = 0;
-
 int
 debugger_instruction(int partial)
 {
