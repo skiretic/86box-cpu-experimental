@@ -356,8 +356,8 @@ reset_fpu_zero(void)
             cpu_state.tag[i]  = TAG_VALID;
             cpu_state.MM[i].q = 0;
         }
-        x87_clear_pointers();
     }
+    x87_clear_pointers();
     cpu_state.ismmx = 0;
 }
 
