@@ -896,6 +896,19 @@ mem_read_rammask(uint32_t addr)
     return rammask;
 }
 
+/* The charge for a misaligned read of linear address addr. A fetch of the
+   line in the window comes here although getpccache would otherwise serve it
+   from the page, where a fetch is charged no misaligned access. */
+static __inline int
+mem_read_misaligned_cycles(uint32_t addr)
+{
+    if (mem_a20_reset_line_fetch && mem_a20_reset_line && !(cr0 >> 31) && ((addr & 0xfffffff0U) == 0xfffffff0U) &&
+        _mem_exec[addr >> MEM_GRANULARITY_BITS])
+        return 0;
+
+    return timing_misaligned;
+}
+
 uint8_t *
 getpccache(uint32_t a)
 {
@@ -907,6 +920,20 @@ getpccache(uint32_t a)
 
     if (mem_a20_reset_line) {
         if (!(cr0 >> 31) && ((a & 0xfffffff0U) == 0xfffffff0U)) {
+            /* The prefetch timing the code below selects, for the mapping
+               the line is read from, and as often: once per load of the
+               page, which the fetch helpers ask for again only after pccache
+               is dropped (0xffffffff). Meanwhile pccache holds a value no
+               page has, so every fetch of the line still comes here. */
+            if (_mem_exec[a >> MEM_GRANULARITY_BITS] && (pccache != 0xfffffffeU)) {
+                if (is286) {
+                    if (read_mapping[a >> MEM_GRANULARITY_BITS] && (read_mapping[a >> MEM_GRANULARITY_BITS]->flags & MEM_MAPPING_ROM_WS))
+                        cpu_prefetch_cycles = cpu_rom_prefetch_cycles;
+                    else
+                        cpu_prefetch_cycles = cpu_mem_prefetch_cycles;
+                }
+                pccache = 0xfffffffeU;
+            }
             cpu_fetch_device = 1;
             return NULL;
         }
@@ -1163,7 +1190,7 @@ readmemwl(uint32_t addr)
         uintptr_t     *rl2 = &(readlookup2[large_offset | (addr >> 12)]);
 
         if (!cpu_cyrix_alignment || (addr & 7) == 7)
-            cycles -= timing_misaligned;
+            cycles -= mem_read_misaligned_cycles(addr);
         if ((addr & 0xfff) > 0xffe) {
             if (cr0 >> 31) {
                 for (uint8_t i = 0; i < 2; i++) {
@@ -1408,7 +1435,7 @@ readmemll(uint32_t addr)
         uintptr_t     *rl2 = &(readlookup2[large_offset | (addr >> 12)]);
 
         if (!cpu_cyrix_alignment || (addr & 7) > 4)
-            cycles -= timing_misaligned;
+            cycles -= mem_read_misaligned_cycles(addr);
         if ((addr & 0xfff) > 0xffc) {
             if (cr0 >> 31) {
                 for (i = 0; i < 4; i++) {
