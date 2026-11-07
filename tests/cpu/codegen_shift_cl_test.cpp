@@ -48,6 +48,9 @@ void codegen_check_seg_write(codeblock_t *, ir_data_t *, x86seg *) { }
 int codegen_exit_cycles(int) { return 0; }
 void codegen_record_exit(int, int) { }
 void codegen_flags_known_use(ir_data_t *, int) { }
+/* The flags rebuilds are only call targets in the generated uops. */
+void jit_flags_rebuild(void) { std::abort(); }
+void jit_flags_rebuild_zpna(void) { std::abort(); }
 void codegen_fetch_walk(uint32_t) { }
 int codegen_fetch_walk_off;
 int codegen_page2_walked;
