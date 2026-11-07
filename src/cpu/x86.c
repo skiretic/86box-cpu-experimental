@@ -393,7 +393,7 @@ reset_fpu_hard(void)
 
     if ((fpu_type == FPU_8087) || (fpu_type == FPU_80187) || (fpu_type == FPU_287) || (fpu_type == FPU_287XL))
         reset_fpu_init();
-    else if ((fpu_type == FPU_387) && !is486)
+    else if (fpu_type == FPU_387)
         reset_387();
     else if (zero)
         reset_fpu_zero();
@@ -512,7 +512,7 @@ reset_common(int hard, int src)
        well as the CPU's (soft_reset_387). A 287 is left alone: on the
        CS8230 its RESET comes from the system reset and port F1h only, and
        the 82C291 takes a 387SX. */
-    if (!hard && (src & soft_reset_387) && !is486 && (fpu_type == FPU_387))
+    if (!hard && (src & soft_reset_387) && (fpu_type == FPU_387))
         reset_387();
 
     ccr0 = ccr1 = ccr2 = ccr3 = ccr4 = ccr5 = ccr6 = ccr7 = 0;
