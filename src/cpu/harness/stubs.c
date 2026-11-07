@@ -328,6 +328,18 @@ video_get_wait_states(uint32_t address, int write, unsigned size, uint64_t cpu_c
     return 0;
 }
 
+/* No AGP aperture here. */
+const uint32_t *
+agpgart_cpu_entry(const mem_mapping_t *map, uint32_t addr, _Atomic uint32_t **gen, uint32_t *val, uint32_t *ra)
+{
+    (void) map;
+    (void) addr;
+    (void) gen;
+    (void) val;
+    (void) ra;
+    return NULL;
+}
+
 void *
 plat_mmap(size_t size, uint8_t executable, uint8_t *large)
 {
