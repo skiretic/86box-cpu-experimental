@@ -60,7 +60,8 @@ typedef struct ati28800_t {
     svga_t       svga;
     ati_eeprom_t eeprom;
 
-    rom_t bios_rom;
+    rom_t         bios_rom;
+    mem_mapping_t rom_window[4];
 
     uint8_t  regs[256];
     int      index;
@@ -78,6 +79,7 @@ typedef struct ati28800_t {
     int      ksc5601_mode_enabled;
 
     int type, type_korean;
+    int rom_paged;
 } ati28800_t;
 
 static video_timings_t timing_ati28800     = { .type = VIDEO_ISA, .write_b = 3, .write_w = 3, .write_l = 6, .read_b = 5, .read_w = 5, .read_l = 10 };
@@ -102,6 +104,246 @@ ati28800_log(const char *fmt, ...)
 #endif
 
 static void ati28800_recalctimings(svga_t *svga);
+
+static uint32_t
+ati28800_lookup_lut_ram(svga_t* svga, uint32_t val)
+{
+    if (!svga->lut_map)
+        return val;
+
+    uint8_t r = getcolr(svga->pallook[getcolr(val)]);
+    uint8_t g = getcolg(svga->pallook[getcolg(val)]);
+    uint8_t b = getcolb(svga->pallook[getcolb(val)]);
+    return makecol32(b, g, r) | (val & 0xFF000000);
+}
+
+#define lookup_lut(val) ati28800_lookup_lut_ram(svga, val)
+
+static void
+svga_render_ati28800_24bpp_lowres(svga_t *svga)
+{
+    int       x;
+    uint32_t *p;
+    uint32_t  changed_addr;
+    uint32_t  addr;
+    uint32_t  dat0;
+    uint32_t  dat1;
+    uint32_t  dat2;
+    uint32_t  fg;
+
+    if (((svga->displine + svga->y_add) < 0) ||
+        (svga->monitor->target_buffer == NULL) ||
+        (svga->monitor->target_buffer->line[svga->displine + svga->y_add] == NULL))
+        return;
+
+    if (svga->force_old_addr) {
+        if ((svga->displine + svga->y_add) < 0)
+            return;
+
+        if (svga->changedvram[svga->memaddr >> 12] || svga->changedvram[(svga->memaddr >> 12) + 1] || svga->fullchange) {
+            if (svga->firstline_draw == 2000)
+                svga->firstline_draw = svga->displine;
+            svga->lastline_draw = svga->displine;
+
+            for (x = 0; x <= (svga->hdisp + svga->scrollcache); x++) {
+                fg = svga->vram[svga->memaddr] | (svga->vram[svga->memaddr + 1] << 8) | (svga->vram[svga->memaddr + 2] << 16);
+                svga->memaddr += 3;
+                svga->memaddr &= svga->vram_display_mask;
+                svga->monitor->target_buffer->line[svga->displine + svga->y_add][(x << 1) + svga->x_add] = svga->monitor->target_buffer->line[svga->displine + svga->y_add][(x << 1) + 1 + svga->x_add] = lookup_lut(fg);
+            }
+        }
+    } else {
+        changed_addr = svga->remap_func(svga, svga->memaddr);
+
+        if (svga->changedvram[changed_addr >> 12] || svga->changedvram[(changed_addr >> 12) + 1] || svga->fullchange) {
+            p = &svga->monitor->target_buffer->line[svga->displine + svga->y_add][svga->x_add];
+
+            if (svga->firstline_draw == 2000)
+                svga->firstline_draw = svga->displine;
+            svga->lastline_draw = svga->displine;
+
+            if (!svga->remap_required) {
+                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
+                    dat0 = *(uint32_t *) (&svga->vram[svga->memaddr & svga->vram_display_mask]);
+                    dat1 = *(uint32_t *) (&svga->vram[(svga->memaddr + 4) & svga->vram_display_mask]);
+                    dat2 = *(uint32_t *) (&svga->vram[(svga->memaddr + 8) & svga->vram_display_mask]);
+
+                    p[0] = p[1] = lookup_lut(dat0 & 0xffffff);
+                    p[2] = p[3] = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
+                    p[4] = p[5] = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
+                    p[6] = p[7] = lookup_lut(dat2 >> 8);
+                    p += 8;
+
+                    svga->memaddr += 12;
+                }
+            } else {
+                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
+                    addr = svga->remap_func(svga, svga->memaddr);
+                    dat0 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+                    addr = svga->remap_func(svga, svga->memaddr + 4);
+                    dat1 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+                    addr = svga->remap_func(svga, svga->memaddr + 8);
+                    dat2 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+
+                    p[0] = p[1] = lookup_lut(dat0 & 0xffffff);
+                    p[2] = p[3] = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
+                    p[4] = p[5] = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
+                    p[6] = p[7] = lookup_lut(dat2 >> 8);
+                    p += 8;
+
+                    svga->memaddr += 12;
+                }
+            }
+            svga->memaddr &= svga->vram_display_mask;
+        }
+    }
+}
+
+static void
+svga_render_ati28800_24bpp_highres(svga_t *svga)
+{
+    int       x;
+    uint32_t *p;
+    uint32_t  changed_addr;
+    uint8_t   addr;
+    uint32_t  dat0;
+    uint32_t  dat1;
+    uint32_t  dat2;
+    uint32_t  dat;
+
+    if (((svga->displine + svga->y_add) < 0) ||
+        (svga->monitor->target_buffer == NULL) ||
+        (svga->monitor->target_buffer->line[svga->displine + svga->y_add] == NULL))
+        return;
+
+    if (svga->force_old_addr) {
+        if (svga->changedvram[svga->memaddr >> 12] || svga->changedvram[(svga->memaddr >> 12) + 1] || svga->fullchange) {
+            p = &svga->monitor->target_buffer->line[svga->displine + svga->y_add][svga->x_add];
+
+            if (svga->firstline_draw == 2000)
+                svga->firstline_draw = svga->displine;
+            svga->lastline_draw = svga->displine;
+
+            for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
+                dat  = *(uint32_t *) (&svga->vram[svga->memaddr & svga->vram_display_mask]);
+                p[x] = lookup_lut(dat & 0xffffff);
+
+                dat      = *(uint32_t *) (&svga->vram[(svga->memaddr + 3) & svga->vram_display_mask]);
+                p[x + 1] = lookup_lut(dat & 0xffffff);
+
+                dat      = *(uint32_t *) (&svga->vram[(svga->memaddr + 6) & svga->vram_display_mask]);
+                p[x + 2] = lookup_lut(dat & 0xffffff);
+
+                dat      = *(uint32_t *) (&svga->vram[(svga->memaddr + 9) & svga->vram_display_mask]);
+                p[x + 3] = lookup_lut(dat & 0xffffff);
+
+                svga->memaddr += 12;
+            }
+            svga->memaddr &= svga->vram_display_mask;
+        }
+    } else {
+        changed_addr = svga->remap_func(svga, svga->memaddr);
+
+        if (svga->changedvram[changed_addr >> 12] || svga->changedvram[(changed_addr >> 12) + 1] || svga->fullchange) {
+            p = &svga->monitor->target_buffer->line[svga->displine + svga->y_add][svga->x_add];
+
+            if (svga->firstline_draw == 2000)
+                svga->firstline_draw = svga->displine;
+            svga->lastline_draw = svga->displine;
+
+            if (!svga->remap_required) {
+                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
+                    dat0 = *(uint32_t *) (&svga->vram[svga->memaddr & svga->vram_display_mask]);
+                    dat1 = *(uint32_t *) (&svga->vram[(svga->memaddr + 4) & svga->vram_display_mask]);
+                    dat2 = *(uint32_t *) (&svga->vram[(svga->memaddr + 8) & svga->vram_display_mask]);
+
+                    *p++ = lookup_lut(dat0 & 0xffffff);
+                    *p++ = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
+                    *p++ = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
+                    *p++ = lookup_lut(dat2 >> 8);
+
+                    svga->memaddr += 12;
+                }
+            } else {
+                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
+                    addr = svga->remap_func(svga, svga->memaddr);
+                    dat0 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+                    addr = svga->remap_func(svga, svga->memaddr + 4);
+                    dat1 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+                    addr = svga->remap_func(svga, svga->memaddr + 8);
+                    dat2 = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
+
+                    *p++ = lookup_lut(dat0 & 0xffffff);
+                    *p++ = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
+                    *p++ = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
+                    *p++ = lookup_lut(dat2 >> 8);
+
+                    svga->memaddr += 12;
+                }
+            }
+            svga->memaddr &= svga->vram_display_mask;
+        }
+    }
+}
+
+/* The VGA Wonder XL and XL24 have a 64 KB BIOS but decode only the 32 KB its
+   header declares. Registers A4h and A5h page the rest in, 4 KB at a time:
+   bits 3:0 and 7:4 of A4h pick the ROM pages seen at C4000-C4FFF and
+   C5000-C5FFF, those of A5h the pages at C6000-C6FFF and C7000-C7FFF; 54h
+   and 76h are the identity mapping. The BIOS selects page 9 (or Dh)
+   for a multisync monitor: it holds the lookup for the 800x600 and 1024x768
+   modes, which the BIOS only calls when it sees that page's number at 6FFEh. */
+static uint8_t
+ati28800_rom_window_readb(uint32_t addr, void *priv)
+{
+    const ati28800_t *ati28800 = (ati28800_t *) priv;
+    uint32_t          window   = (addr >> 12) & 3;
+    uint32_t          page     = (ati28800->regs[0xa4 + (window >> 1)] >> ((window & 1) << 2)) & 0x0f;
+
+    return ati28800->bios_rom.rom[(page << 12) | (addr & 0x0fff)];
+}
+
+static uint16_t
+ati28800_rom_window_readw(uint32_t addr, void *priv)
+{
+    return ati28800_rom_window_readb(addr, priv) | (ati28800_rom_window_readb(addr + 1, priv) << 8);
+}
+
+static uint32_t
+ati28800_rom_window_readl(uint32_t addr, void *priv)
+{
+    return ati28800_rom_window_readw(addr, priv) | (ati28800_rom_window_readw(addr + 2, priv) << 16);
+}
+
+static void
+ati28800_rom_window_recalc(ati28800_t *ati28800)
+{
+    for (int i = 0; i < 4; i++) {
+        uint32_t page = (ati28800->regs[0xa4 + (i >> 1)] >> ((i & 1) << 2)) & 0x0f;
+
+        mem_mapping_set_exec(&ati28800->rom_window[i], ati28800->bios_rom.rom + (page << 12));
+    }
+
+    /* The same addresses now hold different code. */
+    mem_invalidate_range(0xc4000, 0xc7fff);
+}
+
+/* Call after loading the 64 KB image at C0000. */
+static void
+ati28800_rom_paging_init(ati28800_t *ati28800)
+{
+    mem_mapping_set_addr(&ati28800->bios_rom.mapping, 0xc0000, 0x4000);
+    for (int i = 0; i < 4; i++)
+        mem_mapping_add(&ati28800->rom_window[i], 0xc4000 + (i << 12), 0x1000,
+                        ati28800_rom_window_readb, ati28800_rom_window_readw, ati28800_rom_window_readl,
+                        NULL, NULL, NULL,
+                        NULL, MEM_MAPPING_EXTERNAL | MEM_MAPPING_ROM_WS, ati28800);
+
+    ati28800->rom_paged  = 1;
+    ati28800->regs[0xa4] = 0x54;
+    ati28800->regs[0xa5] = 0x76;
+    ati28800_rom_window_recalc(ati28800);
+}
 
 static void
 ati28800_out(uint16_t addr, uint8_t val, void *priv)
@@ -153,6 +395,11 @@ ati28800_out(uint16_t addr, uint8_t val, void *priv)
                         if ((old ^ val) & 0x10)
                             svga_recalctimings(svga);
                     }
+                    break;
+                case 0xa4:
+                case 0xa5:
+                    if (ati28800->rom_paged && (old != val))
+                        ati28800_rom_window_recalc(ati28800);
                     break;
                 case 0xb3:
                     ati_eeprom_write(&ati28800->eeprom, val & 8, val & 2, val & 1);
@@ -556,6 +803,11 @@ ati28800_recalctimings(svga_t *svga)
     }
 
     svga->hoverride = 1;
+
+    if (svga->render == svga_render_24bpp_lowres)
+        svga->render = svga_render_ati28800_24bpp_lowres;
+    else if (svga->render == svga_render_24bpp_highres)
+        svga->render = svga_render_ati28800_24bpp_highres;
 }
 
 static void
@@ -661,8 +913,9 @@ ati28800_init(const device_t *info)
             ati28800->id = 5;
             rom_init(&ati28800->bios_rom,
                      BIOS_VGAXL_ROM_PATH,
-                     0xc0000, 0x8000, 0x7fff,
+                     0xc0000, 0x10000, 0xffff,
                      0, MEM_MAPPING_EXTERNAL);
+            ati28800_rom_paging_init(ati28800);
             ati28800->svga.ramdac = device_add(&sc11486_ramdac_device);
             break;
 
@@ -683,6 +936,7 @@ ati28800_init(const device_t *info)
                                  BIOS_XL24_ODD_PATH,
                                  0xc0000, 0x10000, 0xffff,
                                  0, MEM_MAPPING_EXTERNAL);
+            ati28800_rom_paging_init(ati28800);
             ati28800->svga.ramdac = device_add(&bt481_ramdac_device);
             break;
 
@@ -806,7 +1060,7 @@ static const device_config_t ati28800_5_config[] = {
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
                 .local         = VGAWONDERXL,
-                .size          = 32768,
+                .size          = 65536,
                 .flags         = 0,
                 .files         = { BIOS_VGAXL_ROM_PATH, "" }
             },
