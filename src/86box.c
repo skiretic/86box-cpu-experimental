@@ -19,7 +19,7 @@
  *          Copyright 2021      Laci bá'
  *          Copyright 2021      dob205
  *          Copyright 2021      Andreas J. Reichel.
- *          Copyright 2021-2025 Jasmine Iwanek.
+ *          Copyright 2021-2026 Jasmine Iwanek.
  */
 #include <inttypes.h>
 #include <stdarg.h>
@@ -37,7 +37,6 @@
 #endif
 #ifdef __APPLE__
 #    include <string.h>
-#    include <dispatch/dispatch.h>
 #    ifdef __aarch64__
 #        include <pthread.h>
 #    endif
@@ -363,11 +362,6 @@ int  start_vmm = 1;
 /* Statistics. */
 extern int mmuflush;
 
-/* emulator % */
-int fps;
-int framecount;
-static uint32_t fps_sample_elapsed_ms = 1000;
-
 extern int output;
 int        atfullspeed;
 
@@ -384,7 +378,6 @@ int   scrnsz_x = SCREEN_RES_X; /* current screen size, X */
 int   scrnsz_y = SCREEN_RES_Y; /* current screen size, Y */
 #endif
 int config_changed; /* config has changed */
-int title_update;
 int framecountx        = 0;
 static pc_block_t pc_block; /* pc_run()'s carry from block to block */
 int hard_reset_pending = 0;
@@ -1992,13 +1985,16 @@ pc_reset_hard_init(void)
     lpt_standalone_init();
     lpt_devices_init();
 
-    /* Reset and reconfigure the serial ports. */
-    /* note: SLIP COM side has to be initialized before the network side */
+    /* Reset the UARTs first. SLIP COM hardware needs its UART before the
+       network side, while char API modem backends attach after network cards
+       so their SLiRP ranges follow the ordinary network-card allocations. */
     serial_standalone_init();
-    serial_devices_init();
 
     /* Reset and reconfigure the Network Card layer. */
     network_reset();
+
+    /* Attach configured COM character devices after the network cards. */
+    serial_devices_init();
 
     /* Reset and reconfigure the MCA memory expansion boards. */
     mcamem_reset();
@@ -2026,6 +2022,7 @@ pc_reset_hard_init(void)
     /* Reset and reconfigure the SCSI layer. */
     scsi_card_init();
     usb_msd_hard_reset();
+    usb_flash_hard_reset();
 
     scsi_disk_hard_reset();
 
@@ -2196,14 +2193,6 @@ pc_close(UNUSED(thread_t *ptr))
     automation_close();
 }
 
-#ifdef __APPLE__
-static void
-_ui_emu_status(void *s)
-{
-    ui_emu_status(*((int *) s));
-}
-#endif
-
 void
 pc_run(void)
 {
@@ -2248,64 +2237,17 @@ pc_run(void)
     endblit();
 
     /* Done with this frame, update statistics. */
-    framecount++;
     if (++framecountx >= (force_10ms ? 100 : 1000)) {
         framecountx = 0;
         frames      = 0;
     }
-
-    if (title_update) {
-#ifdef __APPLE__
-        static
-#endif
-        int      speed_percent;
-        int      target_fps;
-        uint32_t elapsed_ms;
-        int64_t  numerator;
-
-        target_fps    = force_10ms ? 100 : 1000;
-        elapsed_ms    = fps_sample_elapsed_ms ? fps_sample_elapsed_ms : 1;
-
-#ifdef SCREENSHOT_MODE
-        if (force_10ms)
-            fps = ((fps + 2) / 5) * 5;
-        else
-            fps = ((fps + 20) / 50) * 50;
-#endif
-        /*
-         * Use real sample duration for title speed percent so delayed timer
-         * callbacks do not create false dip/rebound spikes in speed reporting.
-         */
-        numerator     = (int64_t) fps * 100000LL;
-        speed_percent = (int) ((numerator + ((int64_t) elapsed_ms * target_fps / 2)) /
-                               ((int64_t) elapsed_ms * target_fps));
-
-#ifdef __APPLE__
-        /* Needed due to modifying the UI on the non-main thread is a big no-no. */
-        dispatch_async_f(dispatch_get_main_queue(), &speed_percent, _ui_emu_status);
-#else
-        ui_emu_status(speed_percent);
-#endif
-        title_update = 0;
-    }
 }
 
-/* Handler for the 1-second timer to refresh the window title. */
+/* Handler for the 1-second timer: sample the emulation speed. */
 void
 pc_onesec(void)
 {
-    static uint32_t last_sample_ms = 0;
-    uint32_t        now_ms         = plat_get_ticks();
-
-    fps_sample_elapsed_ms = last_sample_ms ? (now_ms - last_sample_ms) : 1000;
-    if (!fps_sample_elapsed_ms)
-        fps_sample_elapsed_ms = 1;
-    last_sample_ms = now_ms;
-
-    fps        = framecount;
-    framecount = 0;
-
-    title_update = 1;
+    runctl_speed_update();
 }
 
 void

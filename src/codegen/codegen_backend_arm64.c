@@ -177,7 +177,7 @@ static void
 build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule)
 {
     uint32_t *branch_offset;
-    uint32_t *misaligned_offset;
+    uint32_t *misaligned_offset = NULL;
     uint32_t *to_c[2];
     int       has_misaligned = !ea_rule && (size != 1);
 
@@ -390,7 +390,7 @@ static void
 build_store_routine(codeblock_t *block, int size, int is_float)
 {
     uint32_t *branch_offset;
-    uint32_t *misaligned_offset;
+    uint32_t *misaligned_offset = NULL;
 
     /*In - R0 = address, R1 = data
       Out - R1 = abrt*/
