@@ -29,6 +29,8 @@
  *          interpreter's per-instruction cycles for what they interpret,
  *          and their deltas are only reported.
  */
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -37,6 +39,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#    include <windows.h>
+#    include <io.h>
+#else
+#    include <unistd.h>
+#endif
 
 #include <86box/86box.h>
 #include "cpu.h"
@@ -120,6 +130,12 @@ dump_case_hex(const harness_case_t *c)
     fprintf(stderr, "\n");
 }
 
+/* --list: the process's own stderr, kept while stderr is a case's; the
+   entry being run, from 1, and its hex file. */
+static FILE       *list_log;
+static int         list_entry;
+static const char *list_hex_name;
+
 void
 harness_fatal(const char *msg)
 {
@@ -127,6 +143,14 @@ harness_fatal(const char *msg)
     if (cur_case) {
         fprintf(stderr, "  case: %s\n", cur_case->label);
         dump_case_hex(cur_case);
+    }
+    /* The entry's files get their names when it has finished: this one and
+       the ones after it get none (list_abandon() removes its work files as
+       the process exits), and whoever reads the list's stderr is told where
+       it stopped. */
+    if (list_log) {
+        fprintf(list_log, "FATAL from the core during %s: %s\n", cur_phase, msg);
+        fprintf(list_log, "list entry %d (%s) was running: it and the entries after it have no output files\n", list_entry, list_hex_name);
     }
     exit(3);
 }
@@ -337,6 +361,50 @@ static uint32_t ref_cpu_features;
 static uint64_t ref_cr4_mask;
 static uint64_t ref_cr4_ignore;
 
+/* What a case changes that the hard reset leaves as it finds it, and a new
+   process has as setup_machine() left it: the CPU state block, whose reset
+   keeps the fields no RESET defines; the descriptor table registers; and
+   what the interpreter, the far-transfer code and the page walk keep
+   between instructions. reset_machine() puts each back by value. */
+typedef struct fresh_t {
+    void  *obj;
+    size_t size;
+    void  *copy;
+} fresh_t;
+
+#define FRESH(x) { &(x), sizeof(x), NULL }
+static fresh_t fresh[] = {
+    FRESH(cpu_state),
+    FRESH(gdt),
+    FRESH(ldt),
+    FRESH(idt),
+    FRESH(tr),
+    FRESH(abrt_error),
+    FRESH(addr64),
+    FRESH(cgate16),
+    FRESH(cgate32),
+    FRESH(cgate_task),
+    FRESH(intgatesize),
+    FRESH(cpu_block_end),
+    FRESH(eal_r),
+    FRESH(eal_w),
+    FRESH(easeg),
+    FRESH(get_phys_virt),
+    FRESH(mem_logical_addr),
+    FRESH(oddeven),
+    FRESH(oldcs),
+    FRESH(oldss),
+    FRESH(opcode),
+    FRESH(optype),
+    FRESH(pae_pdpte),
+    FRESH(prefetch_prefixes),
+    FRESH(rep_op),
+    FRESH(rf_flag_no_clear),
+    FRESH(rmdat)
+};
+#undef FRESH
+#define FRESH_NR ((int) (sizeof(fresh) / sizeof(fresh[0])))
+
 static void
 step(const char *what)
 {
@@ -415,6 +483,70 @@ model_probe(void)
     harness_model.x87_387 = hasfpu && (fpu_type >= FPU_287XL);
 }
 
+/* What mem_reset() gives a new process, put back in place: mem_reset()
+   itself maps RAM and allocates the page table anew each time it runs. RAM
+   as set up; the page table's dirty and code masks and its eviction list
+   empty (its block lists are codegen_reset()'s); the cache-as-RAM ranges
+   and the A20 gate as mem_reset() leaves them. The mappings are not a
+   case's to change. */
+extern int purgeable_page_count; /* mem.c's, in no header */
+
+static void
+restore_memory(void)
+{
+    const size_t mask_bytes = ((size_t) mem_size * 1024) / 8;
+
+    step("memory");
+    memcpy(ram, ram_ref, mem_size * 1024);
+    memset(page_ff, 0xff, sizeof(page_ff));
+    for (uint32_t i = 0; i < pages_sz; i++) {
+        pages[i].code_present_mask = 0;
+        pages[i].dirty_mask        = 0;
+        pages[i].evict_prev        = EVICT_NOT_IN_LIST;
+        pages[i].evict_next        = 0;
+    }
+    memset(byte_dirty_mask, 0, mask_bytes);
+    memset(byte_code_present_mask, 0, mask_bytes);
+    purgable_page_list_head = 0;
+    purgeable_page_count    = 0;
+    cpu_car_reset();
+    mem_a20_init();
+}
+
+/* The machine's hard reset in the emulator's order (pc_reset_hard_init()
+   and machine_init()): the timers, the CPU, the memory, then the CPU's
+   RESET. setup_machine() runs it once, with the memory's allocation and the
+   recompiler's one-time init where 86box.c has them; reset_machine() runs
+   it again, the memory put back in place. */
+static void
+hard_reset_machine(int first)
+{
+    step("timer_init");
+    timer_init();
+    step("cpu_set");
+    cpu_set();
+    if (first) {
+        step("mem_reset");
+        mem_reset();
+        /* The code memory is MAP_JIT: as 86box.c does, write it unprotected
+           while the backend lays its routines down. The dynarec loop toggles
+           it around every compile from here on. */
+        step("codegen_init");
+#if defined(__APPLE__) && defined(__aarch64__)
+        if (__builtin_available(macOS 11.0, *))
+            pthread_jit_write_protect_np(0);
+#endif
+        codegen_init();
+#if defined(__APPLE__) && defined(__aarch64__)
+        if (__builtin_available(macOS 11.0, *))
+            pthread_jit_write_protect_np(1);
+#endif
+    } else
+        restore_memory();
+    step("resetx86");
+    resetx86();
+}
+
 static void
 setup_machine(int softfloat, int fast_fpu_env)
 {
@@ -458,27 +590,7 @@ setup_machine(int softfloat, int fast_fpu_env)
 
     step("mem_init");
     mem_init();
-    step("timer_init");
-    timer_init();
-    step("cpu_set");
-    cpu_set();
-    step("mem_reset");
-    mem_reset();
-    /* The code memory is MAP_JIT: as 86box.c does, write it unprotected
-       while the backend lays its routines down. The dynarec loop toggles
-       it around every compile from here on. */
-    step("codegen_init");
-#if defined(__APPLE__) && defined(__aarch64__)
-    if (__builtin_available(macOS 11.0, *))
-        pthread_jit_write_protect_np(0);
-#endif
-    codegen_init();
-#if defined(__APPLE__) && defined(__aarch64__)
-    if (__builtin_available(macOS 11.0, *))
-        pthread_jit_write_protect_np(1);
-#endif
-    step("resetx86");
-    resetx86();
+    hard_reset_machine(1);
     model_probe();
 
     step("tables");
@@ -497,6 +609,35 @@ setup_machine(int softfloat, int fast_fpu_env)
     ref_cpu_features = cpu_features;
     ref_cr4_mask     = cpu_CR4_mask;
     ref_cr4_ignore   = cpu_CR4_ignore;
+
+    for (int i = 0; i < FRESH_NR; i++) {
+        fresh[i].copy = malloc(fresh[i].size);
+        if (fresh[i].copy == NULL)
+            harness_fatal("no memory for the machine reference");
+        memcpy(fresh[i].copy, fresh[i].obj, fresh[i].size);
+    }
+}
+
+/* The machine as setup_machine() left it, for a --list case that is not the
+   process's first. The blocks go first, with the page table still as they
+   left it. The recompiler's own state past
+   codegen_reset() (where a block's host code lands, its link generation,
+   the block version pool) is not the machine's and stays. */
+static void
+reset_machine(void)
+{
+    cur_phase = "machine reset";
+    codegen_reset();
+    /* As setup had it: cpu_set() picks the opcode tables by it. */
+    cpu_use_dynarec = 1;
+    hard_reset_machine(0);
+    /* The 386's prefetch queue, and what the Pentium and WinChip 2 timing
+       models carry from one block to the next: no reset empties them. */
+    prefetch_flush();
+    if (codegen_timing_load)
+        codegen_timing_load(NULL);
+    for (int i = 0; i < FRESH_NR; i++)
+        memcpy(fresh[i].obj, fresh[i].copy, fresh[i].size);
 }
 
 /* ---- case state ------------------------------------------------------ */
@@ -824,6 +965,22 @@ capture(harness_state_t *s, int status)
     capture_code_page(s);
 }
 
+/* The arm64 backend's blocks hold the guest's x87 and MMX registers in
+   v8-v15 and return with them changed, though the low half of each is the
+   caller's to keep (AAPCS64, 6.1.2). Named as clobbered in a function of its
+   own, they are saved and restored by it, and the harness's callers find
+   their own values there after a run. */
+#if defined(__aarch64__)
+static void __attribute__((noinline))
+run_dynarec(int32_t cycs)
+{
+    exec386_dynarec(cycs);
+    __asm__ volatile("" : : : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15");
+}
+#else
+#    define run_dynarec(cycs) exec386_dynarec(cycs)
+#endif
+
 static int
 run_until_halt(int dyn)
 {
@@ -840,7 +997,7 @@ run_until_halt(int dyn)
         cycles       = 0;
         cycles_main  = 0;
         if (dyn)
-            exec386_dynarec(SLICE_DYN);
+            run_dynarec(SLICE_DYN);
         else
             exec386(SLICE_INT);
         if (x86_was_reset)
@@ -1252,8 +1409,584 @@ usage(void)
             "  --dump               print every run's final state\n"
             "  --quiet              print only the cases with differences, and the total\n"
             "  --truncate <n>       cut each generated body to n bytes (bisecting a case)\n"
-            "  --verbose            core log lines to stderr\n",
+            "  --verbose            core log lines to stderr\n"
+            "  --list <file>        hand cases in one process: every line of the file is\n"
+            "                       \"<hex file> <stdout file> <stderr file>\" (no spaces in a name), and\n"
+            "                       the two files get what --hex with the hex file's text and the\n"
+            "                       other options given here prints, when the case has finished\n"
+            "                       (until then it is <stdout file>.part, <stderr file>.part);\n"
+            "                       not with --verbose\n",
             harness_gen_class_names(), MAX_RUNS);
+}
+
+/* The lines that end a run's output. */
+static void
+print_totals(int total, int failures, int code_writers, int harness_faults, int gen_no_body, int gen_total)
+{
+    printf("%d case%s, %d with differences, %d write their code page\n", total, total == 1 ? "" : "s", failures, code_writers);
+    /* A sweep that ran nothing must not read as a pass. */
+    if (harness_faults)
+        printf("HARNESS DEFECT: %d case%s faulted in the prelude or epilogue or took #UD from the generator\n", harness_faults, harness_faults == 1 ? "" : "s");
+    if (gen_no_body * 2 > gen_total)
+        printf("VACUOUS: %d of %d generated cases, more than half, ran none of their body\n", gen_no_body, gen_total);
+}
+
+/* A whole file as a string, or NULL with errno set; a directory fails at
+   the read. Zero bytes are left out, as the shell leaves them out of $(cat
+   file). */
+static char *
+read_file(const char *name)
+{
+    FILE  *f   = fopen(name, "rb");
+    size_t len = 0;
+    size_t cap = 4096;
+    char  *buf;
+    int    ch;
+    int    err = 0;
+
+    if (!f)
+        return NULL;
+    buf = malloc(cap);
+    while (buf && ((ch = getc(f)) != EOF)) {
+        if (!ch)
+            continue;
+        if (len + 2 > cap) {
+            char *grown = realloc(buf, cap * 2);
+
+            if (!grown) {
+                free(buf);
+                buf = NULL;
+                break;
+            }
+            buf = grown;
+            cap *= 2;
+        }
+        buf[len++] = (char) ch;
+    }
+    if (!buf)
+        err = ENOMEM;
+    else if (ferror(f))
+        err = errno ? errno : EIO;
+    fclose(f);
+    if (err) {
+        free(buf);
+        errno = err;
+        return NULL;
+    }
+    buf[len] = 0;
+    return buf;
+}
+
+#ifdef _WIN32
+#    define LIST_NULL_DEVICE "NUL"
+#else
+#    define LIST_NULL_DEVICE "/dev/null"
+#endif
+
+typedef struct list_entry_t {
+    const char *hex_name;
+    const char *out_name;
+    const char *err_name;
+    char       *out_part; /* <out_name>.part and <err_name>.part: the case prints into */
+    char       *err_part; /* them, and they get their names when it has finished */
+    char       *hex;      /* the hex file's text, as --hex takes it */
+} list_entry_t;
+
+/* The work files of the entry being run, and whether stdout and stderr are
+   on them. */
+static const char *list_out_part;
+static const char *list_err_part;
+static int         list_out_open;
+static int         list_err_open;
+
+#ifdef _WIN32
+#    define LIST_CREATE_MODE (S_IREAD | S_IWRITE)
+#else
+#    define LIST_CREATE_MODE 0666
+#endif
+
+/* A work file made new: a name that is there already, after the old files
+   were removed, is another entry's file under a spelling list_check() does
+   not see through, and is left alone. Returns 0, or -1 with errno set. */
+static int
+list_create(const char *part)
+{
+    int fd = open(part, O_WRONLY | O_CREAT | O_EXCL, LIST_CREATE_MODE);
+
+    if (fd < 0)
+        return -1;
+    close(fd);
+    return 0;
+}
+
+static int
+list_exists(const char *name)
+{
+    struct stat st;
+
+    return !stat(name, &st);
+}
+
+/* stdout and stderr off the work files: Windows renames and removes no
+   open file. A stream whose reopening failed is closed, and is left so. */
+static void
+list_park(void)
+{
+    FILE *f;
+
+    if (list_out_open) {
+        list_out_open = 0;
+        f             = freopen(LIST_NULL_DEVICE, "w", stdout);
+        (void) f;
+    }
+    if (list_err_open) {
+        list_err_open = 0;
+        f             = freopen(LIST_NULL_DEVICE, "w", stderr);
+        (void) f;
+    }
+}
+
+/* No work file outlives the process: also the exit handler, for the exits
+   that do not come back to run_list() (a fatal() from the core). */
+static void
+list_abandon(void)
+{
+    list_park();
+    if (list_out_part)
+        remove(list_out_part);
+    if (list_err_part)
+        remove(list_err_part);
+    list_out_part = NULL;
+    list_err_part = NULL;
+}
+
+static void
+list_free(char *text, list_entry_t *e, int n)
+{
+    for (int i = 0; i < n; i++) {
+        free(e[i].out_part);
+        free(e[i].err_part);
+        free(e[i].hex);
+    }
+    free(e);
+    free(text);
+}
+
+/* The list's text cut into its entries, the names left in place. Returns
+   their number, or -1 for a line that is neither empty nor three names. */
+static int
+list_entries(char *text, list_entry_t **entries, const char *list)
+{
+    list_entry_t *e    = NULL;
+    int           n    = 0;
+    int           line = 0;
+
+    while (*text) {
+        char *end = strchr(text, '\n');
+        char *name[4];
+        int   names = 0;
+
+        line++;
+        if (end)
+            *end++ = 0;
+        else
+            end = text + strlen(text);
+        while (*text) {
+            text += strspn(text, " \t\r");
+            if (!*text)
+                break;
+            if (names < 4)
+                name[names] = text;
+            names++;
+            text += strcspn(text, " \t\r");
+            if (*text)
+                *text++ = 0;
+        }
+        text = end;
+        if (!names)
+            continue;
+        if (names != 3) {
+            fprintf(stderr, "%s, line %d: a line is \"<hex file> <stdout file> <stderr file>\"\n", list, line);
+            free(e);
+            return -1;
+        }
+        if (!(n & (n + 1))) {
+            list_entry_t *grown = realloc(e, (2 * (size_t) n + 1) * sizeof(*e));
+
+            if (!grown) {
+                perror(list);
+                free(e);
+                return -1;
+            }
+            e = grown;
+        }
+        memset(&e[n], 0, sizeof(e[n]));
+        e[n].hex_name = name[0];
+        e[n].out_name = name[1];
+        e[n].err_name = name[2];
+        n++;
+    }
+    *entries = e;
+    return n;
+}
+
+/* The key that the names of one file share, whatever their spelling: the
+   directory by what it is (its device and file number; on Windows its
+   volume's serial number and its file index), which must be there, then
+   the file's own name in one letter case (on Windows without the dots and
+   spaces at its end, which name nothing there). Allocated, or NULL with
+   errno set. */
+static char *
+list_key(const char *name)
+{
+    const char *base = name;
+    size_t      dir_len;
+    size_t      len;
+    char       *dir;
+    char       *key;
+    char        id[64];
+
+#ifdef _WIN32
+    for (const char *p = name; *p; p++) {
+        if ((*p == '/') || (*p == '\\'))
+            base = p + 1;
+    }
+    /* A drive's letter alone is its current directory. */
+    if ((base == name) && isalpha((unsigned char) name[0]) && (name[1] == ':'))
+        base = name + 2;
+#else
+    if (strrchr(name, '/'))
+        base = strrchr(name, '/') + 1;
+#endif
+    dir_len = (size_t) (base - name);
+    dir     = malloc(dir_len + 2);
+    if (!dir) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memcpy(dir, name, dir_len);
+    dir[dir_len] = 0;
+#ifdef _WIN32
+    if (!dir_len || (dir[dir_len - 1] == ':'))
+        strcat(dir, ".");
+    {
+        BY_HANDLE_FILE_INFORMATION info;
+        HANDLE                     h    = INVALID_HANDLE_VALUE;
+        int                        wn   = MultiByteToWideChar(CP_ACP, 0, dir, -1, NULL, 0);
+        wchar_t                   *wdir = (wn > 0) ? malloc((size_t) wn * sizeof(*wdir)) : NULL;
+        int                        ok   = 0;
+
+        if (wdir && MultiByteToWideChar(CP_ACP, 0, dir, -1, wdir, wn))
+            h = CreateFileW(wdir, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            ok = GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+            CloseHandle(h);
+        }
+        free(wdir);
+        free(dir);
+        if (!ok) {
+            errno = ENOENT;
+            return NULL;
+        }
+        snprintf(id, sizeof(id), "%08lx:%08lx%08lx", (unsigned long) info.dwVolumeSerialNumber, (unsigned long) info.nFileIndexHigh, (unsigned long) info.nFileIndexLow);
+    }
+#else
+    if (!dir_len)
+        strcpy(dir, ".");
+    {
+        struct stat st;
+        int         err = stat(dir, &st) ? errno : (S_ISDIR(st.st_mode) ? 0 : ENOTDIR);
+
+        free(dir);
+        if (err) {
+            errno = err;
+            return NULL;
+        }
+        snprintf(id, sizeof(id), "%llx:%llx", (unsigned long long) st.st_dev, (unsigned long long) st.st_ino);
+    }
+#endif
+    len = strlen(base);
+#ifdef _WIN32
+    while (len && ((base[len - 1] == '.') || (base[len - 1] == ' ')))
+        len--;
+#endif
+    key = malloc(strlen(id) + len + 2);
+    if (!key) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    sprintf(key, "%s/", id);
+    for (size_t i = 0; i < len; i++)
+        key[strlen(id) + 1 + i] = (char) tolower((unsigned char) base[i]);
+    key[strlen(id) + 1 + len] = 0;
+    return key;
+}
+
+typedef struct list_name_t {
+    char       *canon; /* list_key() */
+    const char *name;  /* as the list has it */
+    int         input; /* the list or a hex file: two entries may share a hex file */
+} list_name_t;
+
+static int
+list_name_cmp(const void *a, const void *b)
+{
+    return strcmp(((const list_name_t *) a)->canon, ((const list_name_t *) b)->canon);
+}
+
+/* What must hold before anything is removed or run, with the reason printed
+   when it does not: every output file's directory is there; no output file
+   and no work file is another one, the list or a hex file, by list_key();
+   and one that is there is a plain file, and not the list or a hex file
+   through a link (by device and file number, on a host whose stat() has
+   file numbers). Returns 0, or -1. */
+static int
+list_check(const char *list, const list_entry_t *e, int n)
+{
+    const size_t nr    = 5 * (size_t) n + 1;
+    list_name_t *names = calloc(nr, sizeof(*names));
+    struct stat *in    = malloc(((size_t) n + 1) * sizeof(*in));
+    char        *in_ok = malloc((size_t) n + 1);
+    int          ret   = 0;
+
+    if (!names || !in || !in_ok) {
+        perror(list);
+        ret = -1;
+    }
+    if (!ret) {
+        names[0].name = list;
+        for (int i = 0; i < n; i++) {
+            list_name_t *m = &names[1 + 5 * (size_t) i];
+
+            m[0].name = e[i].hex_name;
+            m[1].name = e[i].out_name;
+            m[2].name = e[i].err_name;
+            m[3].name = e[i].out_part;
+            m[4].name = e[i].err_part;
+        }
+        for (size_t i = 0; (i < nr) && !ret; i++) {
+            names[i].input = !i || !((i - 1) % 5);
+            names[i].canon = list_key(names[i].name);
+            if (names[i].canon)
+                continue;
+            if (!names[i].input) {
+                fprintf(stderr, "%s: %s: its directory: %s\n", list, names[i].name, strerror(errno));
+                ret = -1;
+            } else {
+                /* An input that cannot be reached fails where it is read. */
+                names[i].canon = malloc(strlen(names[i].name) + 1);
+                if (names[i].canon)
+                    strcpy(names[i].canon, names[i].name);
+                else {
+                    perror(list);
+                    ret = -1;
+                }
+            }
+        }
+    }
+    if (!ret) {
+        qsort(names, nr, sizeof(*names), list_name_cmp);
+        for (size_t i = 1; (i < nr) && !ret; i++) {
+            if (!strcmp(names[i - 1].canon, names[i].canon) && !(names[i - 1].input && names[i].input)) {
+                fprintf(stderr, "%s: %s and %s are one file: an output file, and its work file <name>.part, can be no other file of the list\n", list, names[i - 1].name, names[i].name);
+                ret = -1;
+            }
+        }
+    }
+    if (!ret) {
+        in_ok[0] = !stat(list, &in[0]);
+        for (int i = 0; i < n; i++)
+            in_ok[1 + i] = !stat(e[i].hex_name, &in[1 + i]);
+    }
+    for (int i = 0; (i < n) && !ret; i++) {
+        const char *out[4] = { e[i].out_name, e[i].err_name, e[i].out_part, e[i].err_part };
+
+        for (int k = 0; (k < 4) && !ret; k++) {
+            struct stat st;
+
+            if (stat(out[k], &st))
+                continue;
+            if (!S_ISREG(st.st_mode)) {
+                fprintf(stderr, "%s: %s is there and is not a file\n", list, out[k]);
+                ret = -1;
+            }
+            for (int j = 0; (j <= n) && !ret && st.st_ino; j++) {
+                if (in_ok[j] && (in[j].st_ino == st.st_ino) && (in[j].st_dev == st.st_dev)) {
+                    fprintf(stderr, "%s: %s is %s\n", list, out[k], j ? e[j - 1].hex_name : "the list");
+                    ret = -1;
+                }
+            }
+        }
+    }
+    for (size_t i = 0; names && (i < nr); i++)
+        free(names[i].canon);
+    free(names);
+    free(in);
+    free(in_ok);
+    return ret;
+}
+
+/* --list: each entry's case runs as the only case of a process of its own
+   would. Before any case runs the whole list is checked (list_check()), the
+   entries' old output and work files are removed and every hex file is
+   read: a failure there is exit code 2 with nothing run. A case prints into
+   <stdout file>.part and <stderr file>.part, which get their names when it
+   has finished, so an output file that is there is a finished case's
+   whatever ends the process, and no work file is left. Returns the exit
+   code: the greatest a process per case would give (0 every case agrees, 1
+   one does not, 2 one has a bad hex body); 2 as above; 3 for an output file
+   that cannot be written. */
+static int
+run_list(const char *list, harness_case_t *c, int mode16)
+{
+    static int    handler;
+    char         *text = read_file(list);
+    list_entry_t *e    = NULL;
+    int           n    = 0;
+    int           fd;
+    int           rc  = 2;
+    int           ran = 0;
+
+    if (!text) {
+        perror(list);
+        return 2;
+    }
+    n = list_entries(text, &e, list);
+    if (n <= 0) {
+        if (!n)
+            fprintf(stderr, "%s: no entry\n", list);
+        free(text);
+        return 2;
+    }
+    for (int i = 0; i < n; i++) {
+        e[i].out_part = malloc(strlen(e[i].out_name) + 6);
+        e[i].err_part = malloc(strlen(e[i].err_name) + 6);
+        if (!e[i].out_part || !e[i].err_part) {
+            perror(list);
+            goto done;
+        }
+        sprintf(e[i].out_part, "%s.part", e[i].out_name);
+        sprintf(e[i].err_part, "%s.part", e[i].err_name);
+    }
+    if (list_check(list, e, n))
+        goto done;
+    for (int i = 0; i < n; i++) {
+        const char *old[4] = { e[i].out_name, e[i].err_name, e[i].out_part, e[i].err_part };
+
+        for (int k = 0; k < 4; k++) {
+            if (remove(old[k]) && (errno != ENOENT)) {
+                fprintf(stderr, "%s: %s cannot be removed: %s\n", list, old[k], strerror(errno));
+                goto done;
+            }
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        size_t len;
+
+        e[i].hex = read_file(e[i].hex_name);
+        if (!e[i].hex) {
+            perror(e[i].hex_name);
+            goto done;
+        }
+        /* Without the line ends at its end, as $(cat file) gives it. */
+        len = strlen(e[i].hex);
+        while (len && (e[i].hex[len - 1] == '\n'))
+            e[i].hex[--len] = 0;
+    }
+    rc = 3;
+    fflush(stderr);
+    fd       = dup(fileno(stderr));
+    list_log = (fd < 0) ? NULL : fdopen(fd, "w");
+    if (!list_log) {
+        perror(list);
+        if (fd >= 0)
+            close(fd);
+        goto done;
+    }
+    setvbuf(list_log, NULL, _IONBF, 0);
+    if (!handler) {
+        handler = 1;
+        atexit(list_abandon);
+    }
+
+    rc = 0;
+    for (int i = 0; i < n; i++) {
+        int written;
+
+        list_entry    = i + 1;
+        list_hex_name = e[i].hex_name;
+        fflush(stdout);
+        fflush(stderr);
+        /* A work file is the entry's to remove once it has made it. */
+        if (list_create(e[i].out_part)) {
+            fprintf(list_log, "list entry %d (%s): %s: %s; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].out_part, strerror(errno));
+            rc = 3;
+            break;
+        }
+        list_out_part = e[i].out_part;
+        list_out_open = 1;
+        if (!freopen(e[i].out_part, "w", stdout)) {
+            list_out_open = 0;
+            fprintf(list_log, "list entry %d (%s): %s: %s; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].out_part, strerror(errno));
+            rc = 3;
+            break;
+        }
+        if (list_create(e[i].err_part)) {
+            fprintf(list_log, "list entry %d (%s): %s: %s; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].err_part, strerror(errno));
+            rc = 3;
+            break;
+        }
+        list_err_part = e[i].err_part;
+        list_err_open = 1;
+        if (!freopen(e[i].err_part, "w", stderr)) {
+            list_err_open = 0;
+            fprintf(list_log, "list entry %d (%s): %s: %s; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].err_part, strerror(errno));
+            rc = 3;
+            break;
+        }
+        default_case(c);
+        c->body_len = parse_hex(e[i].hex, c->body, HARNESS_BODY_MAX);
+        if (c->body_len < 0) {
+            fprintf(stderr, "bad hex body\n");
+            rc = 2;
+        } else {
+            int r;
+
+            c->mode16 = mode16;
+            if (ran++)
+                reset_machine();
+            r = run_case(c);
+            print_totals(1, !!(r & 3), !!(r & 4), !!(r & 8), 0, 0);
+            if ((r & 15) && !rc)
+                rc = 1;
+        }
+        written = !fflush(stdout);
+        written &= !fflush(stderr);
+        written &= !ferror(stdout) && !ferror(stderr);
+        list_park();
+        /* Neither name is there, the old files removed: one that is, is
+           another entry's file under another spelling, and stays. */
+        if (!written || list_exists(e[i].out_name) || list_exists(e[i].err_name) || rename(e[i].out_part, e[i].out_name)) {
+            fprintf(list_log, "list entry %d (%s): %s, %s cannot be written; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].out_name, e[i].err_name);
+            rc = 3;
+            break;
+        }
+        if (rename(e[i].err_part, e[i].err_name)) {
+            remove(e[i].out_name);
+            fprintf(list_log, "list entry %d (%s): %s cannot be written; it and the entries after it have no output files\n", list_entry, list_hex_name, e[i].err_name);
+            rc = 3;
+            break;
+        }
+        list_out_part = NULL;
+        list_err_part = NULL;
+    }
+    list_abandon();
+    list_hex_name = NULL;
+    fclose(list_log);
+    list_log = NULL;
+done:
+    list_free(text, e, n);
+    return rc;
 }
 
 int
@@ -1275,6 +2008,7 @@ main(int argc, char **argv)
     int             gen_no_body = 0;
     int             total      = 0;
     int             r;
+    const char     *list       = NULL;
 
     default_case(c);
     for (int i = 1; i < argc; i++) {
@@ -1352,13 +2086,22 @@ main(int argc, char **argv)
             truncate_to = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--verbose")) {
             harness_verbose = 1;
+        } else if (!strcmp(argv[i], "--list") && i + 1 < argc) {
+            list = argv[++i];
         } else {
             usage();
             return 2;
         }
     }
-    if (!have_body && !have_seeds) {
+    /* A list is the whole run: its cases are hand bodies of their own. */
+    if ((!have_body && !have_seeds && !list) || (list && (have_body || have_seeds))) {
         usage();
+        return 2;
+    }
+    /* The core's log lines of a list case would be the reset's, where a
+       process of its own prints its setup's. */
+    if (list && harness_verbose) {
+        fprintf(stderr, "--list does not take --verbose\n");
         return 2;
     }
 
@@ -1380,6 +2123,11 @@ main(int argc, char **argv)
         }
     }
 
+    if (list) {
+        r = run_list(list, c, mode16);
+        free(c);
+        return r;
+    }
     if (have_body) {
         c->mode16 = mode16;
         total++;
@@ -1404,12 +2152,7 @@ main(int argc, char **argv)
         }
     }
 
-    printf("%d case%s, %d with differences, %d write their code page\n", total, total == 1 ? "" : "s", failures, code_writers);
-    /* A sweep that ran nothing must not read as a pass. */
-    if (harness_faults)
-        printf("HARNESS DEFECT: %d case%s faulted in the prelude or epilogue or took #UD from the generator\n", harness_faults, harness_faults == 1 ? "" : "s");
-    if (gen_no_body * 2 > gen_total)
-        printf("VACUOUS: %d of %d generated cases, more than half, ran none of their body\n", gen_no_body, gen_total);
+    print_totals(total, failures, code_writers, harness_faults, gen_no_body, gen_total);
     free(c);
     return (failures || code_writers || harness_faults || (gen_no_body * 2 > gen_total)) ? 1 : 0;
 }
