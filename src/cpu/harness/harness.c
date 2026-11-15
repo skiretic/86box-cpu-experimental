@@ -711,9 +711,32 @@ load_softfloat(const harness_case_t *c)
     fpu_state.fds = 0;
 }
 
+/* load_case() finds the blocks handed out since codegen_reset() from two
+   properties of the block cache: the reset's free list hands the blocks out
+   from the last one down and takes a freed block back on top, so they are
+   the numbers from some block up to the last; and a block handed out keeps a
+   dirty_mask pointer for good, which the reset clears. More blocks than
+   this, and it walks every page and block instead. */
+#define LOAD_CASE_BLOCKS_MAX 256
+
+/* Set for a case: load_case() then also walks every page and every block,
+   and stops the process if the short walk left one of them undone. */
+static int load_case_audit;
+
+static int
+page_nr_cmp(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *) a;
+    uint32_t y = *(const uint32_t *) b;
+
+    return (x > y) - (x < y);
+}
+
 static void
 load_case(const harness_case_t *c, int with_code)
 {
+    uint32_t low;
+
     cur_phase = "state load";
 
     if (with_code)
@@ -732,16 +755,62 @@ load_case(const harness_case_t *c, int with_code)
        one. The blocks over the pages put back above, and over those the last
        capture put back, are dropped first: the run would drop them as it
        reached them and count their strikes after the clear. Every page is
-       flushed before any block is cleared. */
-    for (uint32_t i = 0; i < pages_sz; i++) {
-        page_t *page = &pages[i];
+       flushed before any block is cleared.
+       Only the blocks handed out since the case's codegen_reset() and the
+       pages they name are visited, the pages in ascending order: the reset
+       leaves every page list empty and every count zero, and no other page
+       or block can have changed. */
+    low = BLOCK_SIZE;
+    while (low > 1 && codeblock[low - 1].dirty_mask)
+        low--;
+    if (BLOCK_SIZE - low > LOAD_CASE_BLOCKS_MAX) {
+        for (uint32_t i = 0; i < pages_sz; i++) {
+            page_t *page = &pages[i];
 
-        if ((page->block || page->block_2) && page->dirty_mask)
-            codegen_check_flush(page, page->dirty_mask, i << 12);
-    }
-    for (uint32_t i = 0; i < BLOCK_SIZE; i++) {
-        codeblock[i].smc_strikes        = 0;
-        codeblock[i].smc_cooldown_until = 0;
+            if ((page->block || page->block_2) && page->dirty_mask)
+                codegen_check_flush(page, page->dirty_mask, i << 12);
+        }
+        for (uint32_t i = 0; i < BLOCK_SIZE; i++) {
+            codeblock[i].smc_strikes        = 0;
+            codeblock[i].smc_cooldown_until = 0;
+        }
+    } else {
+        uint32_t page_nr[2 * LOAD_CASE_BLOCKS_MAX];
+        int      nr = 0;
+
+        /* A block that left its page lists keeps its addresses: it adds a
+           page whose lists are tested like any other's. */
+        for (uint32_t i = low; i < BLOCK_SIZE; i++) {
+            if ((codeblock[i].phys >> 12) < pages_sz)
+                page_nr[nr++] = codeblock[i].phys >> 12;
+            if ((codeblock[i].phys_2 >> 12) < pages_sz)
+                page_nr[nr++] = codeblock[i].phys_2 >> 12;
+        }
+        qsort(page_nr, nr, sizeof(page_nr[0]), page_nr_cmp);
+        for (int j = 0; j < nr; j++) {
+            page_t *page = &pages[page_nr[j]];
+
+            if (j && (page_nr[j] == page_nr[j - 1]))
+                continue;
+            if ((page->block || page->block_2) && page->dirty_mask)
+                codegen_check_flush(page, page->dirty_mask, page_nr[j] << 12);
+        }
+        for (uint32_t i = low; i < BLOCK_SIZE; i++) {
+            codeblock[i].smc_strikes        = 0;
+            codeblock[i].smc_cooldown_until = 0;
+        }
+        if (load_case_audit) {
+            for (uint32_t i = 0; i < pages_sz; i++) {
+                const page_t *page = &pages[i];
+
+                if ((page->block || page->block_2) && page->dirty_mask)
+                    harness_fatal("load_case: a page outside the visited ones has blocks to flush");
+            }
+            for (uint32_t i = 0; i < BLOCK_SIZE; i++) {
+                if (codeblock[i].smc_strikes || codeblock[i].smc_cooldown_until)
+                    harness_fatal("load_case: a block outside the visited ones has SMC strikes");
+            }
+        }
     }
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
     harness_ram_writer_addr = 0;
@@ -1202,6 +1271,8 @@ static int
 run_case(const harness_case_t *c)
 {
     static harness_state_t st[MAX_RUNS + 1];
+    static uint32_t        case_count;
+    static int             audit_always = -1;
     int                    nruns;
     int                    compiled  = 0; /* the first run that changed no block */
     int                    converged = 0;
@@ -1222,6 +1293,14 @@ run_case(const harness_case_t *c)
        without the CPU writing them, so nothing marks the old blocks. */
     step("codegen_reset");
     codegen_reset();
+    /* The audit: the process's first case and every 256th, or every case
+       with CPU_HARNESS_AUDIT=1 in the environment. */
+    if (audit_always < 0) {
+        const char *env = getenv("CPU_HARNESS_AUDIT");
+
+        audit_always = env && (env[0] == '1');
+    }
+    load_case_audit = audit_always || !(case_count++ & 0xff);
 
     strcpy(run_name[0], "interpreter");
     step(run_name[0]);
