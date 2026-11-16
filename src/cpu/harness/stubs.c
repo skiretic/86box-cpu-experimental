@@ -227,24 +227,50 @@ io_handler(uint8_t set, uint16_t base, uint16_t size,
     (void) priv;
 }
 
+/* x86.h's, which this file cannot include whole. */
+extern uint16_t io_port;
+extern uint32_t io_val;
+extern uint8_t  io_size;
+extern uint8_t  io_write;
+extern uint8_t  io_cycle;
+extern uint8_t  io_cycle_smi;
+
+/* The I/O cycle as io.c's port routines record it around their handlers:
+   an SMI raised inside one is an I/O trap, and the Cyrix SMM header gets
+   the cycle's port, size and data. */
+static void
+io_cycle_begin(uint16_t port, int size, int write, uint32_t val)
+{
+    io_port      = port;
+    io_cycle     = 1;
+    io_cycle_smi = 0;
+    io_size      = size;
+    io_write     = write;
+    if (write)
+        io_val = val;
+}
+
 uint8_t
 inb(uint16_t port)
 {
-    (void) port;
+    io_cycle_begin(port, 1, 0, 0);
+    io_cycle = 0;
     return 0xff;
 }
 
 uint16_t
 inw(uint16_t port)
 {
-    (void) port;
+    io_cycle_begin(port, 2, 0, 0);
+    io_cycle = 0;
     return 0xffff;
 }
 
 uint32_t
 inl(uint16_t port)
 {
-    (void) port;
+    io_cycle_begin(port, 4, 0, 0);
+    io_cycle = 0;
     return 0xffffffff;
 }
 
@@ -258,28 +284,36 @@ uint32_t harness_ram_writer_addr;
 void
 outb(uint16_t port, uint8_t val)
 {
+    io_cycle_begin(port, 1, 1, val);
     if (port == 0xe4)
         mem_writeb_phys(harness_ram_writer_addr, val);
     else if ((port == HARNESS_PORT_TSC_START) || (port == HARNESS_PORT_TSC_END))
         harness_tsc_port(port);
+    else if (port == HARNESS_PORT_SMI)
+        harness_smi();
+    io_cycle = 0;
 }
 
 void
 outw(uint16_t port, uint16_t val)
 {
+    io_cycle_begin(port, 2, 1, val);
     if (port == 0xe4)
         mem_writew_phys(harness_ram_writer_addr, val);
+    io_cycle = 0;
 }
 
 void
 outl(uint16_t port, uint32_t val)
 {
+    io_cycle_begin(port, 4, 1, val);
     if (port == 0xe0)
         harness_ram_writer_addr = val;
     else if (port == 0xe4)
         mem_writel_phys(harness_ram_writer_addr, val);
     else if (port == 0xe8)
         mem_write_phys_block(&val, harness_ram_writer_addr, 4);
+    io_cycle = 0;
 }
 
 void

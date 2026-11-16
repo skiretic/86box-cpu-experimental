@@ -85,6 +85,18 @@ extern harness_model_t harness_model;
 #define HARNESS_PORT_TSC_END   0xed
 
 extern void harness_tsc_port(uint16_t port);
+
+/* The SMI device: an OUT to this port asserts SMI#, taken at the next
+   instruction boundary the CPU loop tests it at. */
+#define HARNESS_PORT_SMI 0xee
+
+/* Where SMM code starts: SMBASE's reset value plus 8000h, and the Cyrix SMM
+   region harness_smi() sets up. A case's handler is code outside the code
+   page, and counts in whether a run compiled anything. */
+#define HARNESS_SMM_ENTRY       0x38000
+#define HARNESS_SMM_ENTRY_CYRIX 0x30000
+
+extern void harness_smi(void);
 extern void harness_irq13(void);
 
 extern int harness_verbose;

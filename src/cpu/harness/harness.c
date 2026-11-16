@@ -334,6 +334,36 @@ harness_tsc_port(uint16_t port)
     }
 }
 
+/* The 386 loop option: every run of a case goes through exec386_2386(), the
+   loop a 286 or 386 runs with the recompiler off, with its own memory and
+   segment code (mmu_2386.c, the OPS_286_386 builds). No run is compiled, so
+   the runs only show that the loop repeats itself; the state they print is
+   what a build is compared on. */
+static int loop_2386;
+
+/* The SMM configuration as reset left it, put back before every run: a run
+   that ends inside SMM would otherwise start the next one there. */
+static uint8_t  ref_ccr1;
+static cyrix_t  ref_cyrix;
+static gxm_t    ref_gxm;
+static uint32_t ref_smbase;
+
+/* The SMI device's OUT. A Cyrix CPU takes SMI# only once its configuration
+   registers enable it and give SMM its memory (ARR3) and header address: the
+   board's BIOS writes them through ports 22h and 23h, which are not here, so
+   the same values are set directly, 64 KB of SMM memory at 30000h. */
+void
+harness_smi(void)
+{
+    if (is_cxsmm) {
+        ccr1              = (ccr1 & ~CCR1_SMAC) | CCR1_USE_SMI | (is_cx6x86 ? CCR1_SM3 : 0);
+        cyrix.arr[3].base = HARNESS_SMM_ENTRY_CYRIX;
+        cyrix.arr[3].size = 0x00010000;
+        cyrix.smhr        = 0x00040000 | SMHR_VALID;
+    }
+    smi_raise();
+}
+
 /* IRQ 13, which FERR# raises with CR0.NE clear (a 386): served at once, as
    a write to port F0h serves it, whose board latch asserts IGNNE# while
    FERR# is up (cpu.c, cpu_write). There is no interrupt controller here to
@@ -582,7 +612,7 @@ setup_machine(int softfloat, int fast_fpu_env)
     fpu_type           = machine_fpu_type;
     cpu_debug_regs_486 = machine_dbg486;
     fpu_softfloat      = softfloat;
-    cpu_use_dynarec    = 1;
+    cpu_use_dynarec    = !loop_2386;
     /* The interpreter always records the x87 instruction and data pointers;
        the recompiler only does so under the accurate FPU environment option,
        so the comparison runs with it on unless the fast mode is under test. */
@@ -591,6 +621,14 @@ setup_machine(int softfloat, int fast_fpu_env)
     step("mem_init");
     mem_init();
     hard_reset_machine(1);
+    if (loop_2386 && (cpu_exec != exec386_2386)) {
+        fprintf(stderr, "--loop2386: %s:%s does not run the 386 loop\n", machine_family, machine_cpu_name);
+        exit(2);
+    }
+    ref_ccr1   = ccr1;
+    ref_cyrix  = cyrix;
+    ref_gxm    = gxm;
+    ref_smbase = smbase;
     model_probe();
 
     step("tables");
@@ -629,7 +667,7 @@ reset_machine(void)
     cur_phase = "machine reset";
     codegen_reset();
     /* As setup had it: cpu_set() picks the opcode tables by it. */
-    cpu_use_dynarec = 1;
+    cpu_use_dynarec = !loop_2386;
     hard_reset_machine(0);
     /* The 386's prefetch queue, and what the Pentium and WinChip 2 timing
        models carry from one block to the next: no reset empties them. */
@@ -871,6 +909,14 @@ load_case(const harness_case_t *c, int with_code)
 
     cpu_cur_status &= ~(CPU_STATUS_V86 | CPU_STATUS_SMM);
     cpu_cur_status |= CPU_STATUS_PMODE;
+    in_smm      = 0;
+    smi_line    = 0;
+    smi_latched = 0;
+    smm_in_hlt  = 0;
+    ccr1        = ref_ccr1;
+    cyrix       = ref_cyrix;
+    gxm         = ref_gxm;
+    smbase      = ref_smbase;
 
     loadcs(c->mode16 ? SEL_CODE16 : SEL_CODE32);
     loadseg(SEL_DATA32, &cpu_state.seg_ds);
@@ -1055,7 +1101,7 @@ run_until_halt(int dyn)
 {
     int slices = 0;
 
-    cpu_use_dynarec = dyn;
+    cpu_use_dynarec = dyn && !loop_2386;
     /* The read and write lookup tables charge cycles as they fill and would
        otherwise carry over from the previous run or case: every run starts
        with them empty and pays the same fills. */
@@ -1065,7 +1111,9 @@ run_until_halt(int dyn)
         timer_target = tsc + 1000000; /* no timer is ever due */
         cycles       = 0;
         cycles_main  = 0;
-        if (dyn)
+        if (loop_2386)
+            exec386_2386(SLICE_INT);
+        else if (dyn)
             run_dynarec(SLICE_DYN);
         else
             exec386(SLICE_INT);
@@ -1240,7 +1288,9 @@ page_blocks_sig(uint32_t phys, uint64_t sig)
 static uint64_t
 blocks_sig(void)
 {
-    return page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
+    uint64_t sig = page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
+
+    return page_blocks_sig(HARNESS_SMM_ENTRY, page_blocks_sig(HARNESS_SMM_ENTRY_CYRIX, sig));
 }
 
 /* The EIP the run's fault was taken at, from the frame its handler left on
@@ -1478,6 +1528,8 @@ usage(void)
             "  --fast-fpu-env       accurate FPU environment off: compiled x87 code leaves the\n"
             "                       FNSTENV/FNSAVE pointer words stale, so those cases differ\n"
             "  --nolink             block linking off\n"
+            "  --loop2386           every run through exec386_2386(), the loop of a 286 or 386 with\n"
+            "                       the recompiler off (a --cpu that runs it); nothing is compiled\n"
             "  --cpu <family:name>  the CPU table entry, internal family name and CPU name\n"
             "                       (default pentium2_deschutes:600)\n"
             "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default the CPU's own\n"
@@ -2130,6 +2182,8 @@ main(int argc, char **argv)
             fast_fpu_env = 1;
         } else if (!strcmp(argv[i], "--nolink")) {
             nolink = 1;
+        } else if (!strcmp(argv[i], "--loop2386")) {
+            loop_2386 = 1;
         } else if (!strcmp(argv[i], "--cpu") && i + 1 < argc) {
             int end = 0;
 
