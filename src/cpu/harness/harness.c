@@ -64,6 +64,7 @@
 #include "x86_flags.h"
 #include "codegen.h"
 #include "codegen_backend.h"
+#include "codegen_link.h"
 
 #include "harness.h"
 
@@ -1323,6 +1324,74 @@ fault_eip(void)
     return get32(addr);
 }
 
+/* The block cache as codegen_reset() leaves it. With the recompiler built
+   from scripts/harness-fast-reset.diff, a case after the process's first
+   resets only the blocks handed out since the last reset (the numbers from
+   the lowest one with a dirty_mask up, as load_case() finds them) and their
+   pages; on an audited case every page, block and link slot is then checked
+   against what codegen_reset() leaves. Without the patch, codegen_reset(). */
+static void
+reset_blocks(void)
+{
+#ifdef CODEGEN_HAS_RESET_FROM
+    static int full_done;
+    uint32_t   low = BLOCK_SIZE;
+
+    if (!full_done) {
+        codegen_reset();
+        full_done = 1;
+        return;
+    }
+    while (low > 1 && codeblock[low - 1].dirty_mask)
+        low--;
+    if (!codegen_reset_from(low) || !load_case_audit)
+        return;
+    for (uint32_t i = 0; i < pages_sz; i++) {
+        const page_t *page = &pages[i];
+
+        if (page->block || page->block_2 || page->head || (page->write_b != mem_write_ramb_page)
+            || (page->write_w != mem_write_ramw_page) || (page->write_l != mem_write_raml_page))
+            harness_fatal("reset: a page is not as codegen_reset() leaves it");
+    }
+    for (uint32_t i = 0; i < BLOCK_SIZE; i++) {
+        codeblock_t want;
+
+        memset(&want, 0, sizeof(want));
+        want.next  = (i >= 2) ? (i - 1) : 0;
+        want.flags = CODEBLOCK_IN_FREE_LIST;
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+        /* Blocks below low keep the link_gen of an earlier reset: nothing
+           reads it before codegen_block_init() replaces it. */
+        want.link_gen = (i >= low) ? (codeblock[0].link_gen ? (codeblock[0].link_gen + i) : 0) : codeblock[i].link_gen;
+#    endif
+        if (memcmp(&codeblock[i], &want, sizeof(want)))
+            harness_fatal("reset: a block is not as codegen_reset() leaves it");
+    }
+    for (uint32_t i = 0; i < HASH_SIZE; i++) {
+        if (codeblock_hash[i])
+            harness_fatal("reset: the block hash is not empty");
+    }
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    {
+        const uint8_t *p = (const uint8_t *) codegen_link_slots;
+
+        for (size_t i = 0; i < sizeof(codegen_link_slots); i++) {
+            if (p[i])
+                harness_fatal("reset: a link slot is not empty");
+        }
+    }
+#        ifdef CODEGEN_BACKEND_HAS_LINK_SETS
+    for (uint32_t i = 0; i < BLOCK_SIZE * CODEGEN_LINK_SLOTS; i++) {
+        if (codegen_link_site_set[i])
+            harness_fatal("reset: a link site is not empty");
+    }
+#        endif
+#    endif
+#else
+    codegen_reset();
+#endif
+}
+
 /* Returns 0 when every run agrees, else a bit set: 1 state, 2 timing, 4 a
    generated body wrote its code page, 8 the harness's own code faulted or a
    generated body took #UD; and 16, not a failure, when the case ran none of
@@ -1349,10 +1418,6 @@ run_case(const harness_case_t *c)
         dump_case_hex(c);
     }
 
-    /* Fresh block cache for every case: the code page gets new bytes
-       without the CPU writing them, so nothing marks the old blocks. */
-    step("codegen_reset");
-    codegen_reset();
     /* The audit: the process's first case and every 256th, or every case
        with CPU_HARNESS_AUDIT=1 in the environment. */
     if (audit_always < 0) {
@@ -1361,6 +1426,10 @@ run_case(const harness_case_t *c)
         audit_always = env && (env[0] == '1');
     }
     load_case_audit = audit_always || !(case_count++ & 0xff);
+    /* Fresh block cache for every case: the code page gets new bytes
+       without the CPU writing them, so nothing marks the old blocks. */
+    step("codegen_reset");
+    reset_blocks();
 
     strcpy(run_name[0], "interpreter");
     step(run_name[0]);

@@ -1,0 +1,112 @@
+cpu_harness only: a light codegen_reset() for the CPU test harness.
+
+Applied by the test kit to its own harness build trees, never to an 86Box
+build and never committed under src/. With it, cpu_harness resets only the
+blocks a case handed out (src/cpu/harness/harness.c, reset_blocks());
+without it, cpu_harness calls codegen_reset() as before. The outputs are the
+same either way.
+
+Apply from the top of the tree: git apply scripts/harness-fast-reset.diff
+
+diff --git a/src/codegen/codegen.h b/src/codegen/codegen.h
+index ecdf82938..da7342ad1 100644
+--- a/src/codegen/codegen.h
++++ b/src/codegen/codegen.h
+@@ -376,6 +376,9 @@ codegen_mark_code_present(codeblock_t *block, uint32_t start_pc, int len)
+ 
+ extern void codegen_init(void);
+ extern void codegen_reset(void);
++/*For the CPU test harness only, from scripts/harness-fast-reset.diff*/
++#define CODEGEN_HAS_RESET_FROM
++extern int  codegen_reset_from(uint32_t low);
+ extern void codegen_block_init(uint32_t phys_addr);
+ extern void codegen_block_remove(void);
+ extern void codegen_block_start_recompile(codeblock_t *block);
+diff --git a/src/codegen/codegen_block.c b/src/codegen/codegen_block.c
+index 8c0d03434..d2be87e0f 100644
+--- a/src/codegen/codegen_block.c
++++ b/src/codegen/codegen_block.c
+@@ -638,6 +638,83 @@ codegen_reset(void)
+ #endif
+ }
+ 
++/*codegen_reset() for a cache that has handed out no block below low since the
++  last reset, for the CPU test harness. The reset's free list hands the blocks
++  out from the last one down and takes a freed block back on top, so only the
++  blocks from low up, their pages and their link slots can differ from what
++  the reset left; the same calls are made on them in the same order. Blocks
++  1 to low - 1 keep the link_gen the last reset gave them instead of a new
++  one: codegen_block_init() gives a block a new link_gen before any slot can
++  name it. Returns 0 when it did a full codegen_reset() instead.*/
++#define RESET_FROM_MAX 4096
++int
++codegen_reset_from(uint32_t low)
++{
++    static uint32_t page_nr[2 * RESET_FROM_MAX + 1];
++    int             nr = 0;
++
++    if ((low < 1) || (low > BLOCK_SIZE) || ((BLOCK_SIZE - low) > RESET_FROM_MAX)
++#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
++        || (link_gen_last > (UINT32_MAX - 2 * BLOCK_SIZE))
++#endif
++    ) {
++        codegen_reset();
++        return 0;
++    }
++
++    /*Every page a block from low up is listed on, and page 0, where
++      delete_block() takes the blocks below with phys cleared.*/
++    page_nr[nr++] = 0;
++    for (uint32_t c = low; c < BLOCK_SIZE; c++) {
++        page_nr[nr++] = codeblock[c].phys >> 12;
++        page_nr[nr++] = codeblock[c].phys_2 >> 12;
++    }
++
++    for (uint32_t c = low; c < BLOCK_SIZE; c++) {
++        codeblock_t *block = &codeblock[c];
++
++        if (block->valid) {
++            block->phys   = 0;
++            block->phys_2 = 0;
++            delete_block(block);
++        }
++    }
++
++    memset(&codeblock[low], 0, (BLOCK_SIZE - low) * sizeof(codeblock_t));
++    memset(&codeblock[0], 0, sizeof(codeblock_t));
++    memset(codeblock_hash, 0, HASH_SIZE * sizeof(uint32_t));
++    for (int c = 0; c < nr; c++) {
++        if (page_nr[c] < pages_sz) {
++            pages[page_nr[c]].block   = BLOCK_INVALID;
++            pages[page_nr[c]].block_2 = BLOCK_INVALID;
++            pages[page_nr[c]].head    = BLOCK_INVALID;
++        }
++    }
++
++    block_free_list = 0;
++    block_free_list_add(&codeblock[0]);
++    /*What adding blocks 1 to low - 1 again would change*/
++    if (low > 1) {
++#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
++        if (codegen_block_link)
++            link_gen_last += low - 1;
++#endif
++        block_free_list = low - 1;
++    }
++    for (uint32_t c = low; c < BLOCK_SIZE; c++)
++        block_free_list_add(&codeblock[c]);
++#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
++    /*The slots and sets of every block were emptied as it was added*/
++#    ifdef CODEGEN_BACKEND_HAS_LINK_SETS
++    link_set_free_nr = 0;
++    for (int c = CODEGEN_LINK_SETS - 1; c > 0; c--)
++        link_set_free[link_set_free_nr++] = c;
++#    endif
++    codegen_block_link = cpu_dyn_block_link;
++#endif
++    return 1;
++}
++
+ void
+ dump_block(void)
+ {
