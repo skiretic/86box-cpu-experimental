@@ -1272,32 +1272,35 @@ static int dump   = 0;
 static int quiet  = 0;
 static int truncate_to = -1; /* cut a generated body to this many bytes */
 
-/* The recompiler's blocks on one page as a signature: the block numbers,
-   start addresses, lengths and whether each holds compiled code. A run that
-   marked, compiled or dropped a block changes it. */
-static uint64_t
-page_blocks_sig(uint32_t phys, uint64_t sig)
-{
-    uint32_t nr = pages[phys >> 12].block;
-
-    while (nr) {
-        const codeblock_t *b = &codeblock[nr];
-
-        sig = (sig ^ nr) * 0x100000001b3ULL;
-        sig = (sig ^ b->pc) * 0x100000001b3ULL;
-        sig = (sig ^ (uint32_t) b->ins) * 0x100000001b3ULL;
-        sig = (sig ^ (b->flags & CODEBLOCK_WAS_RECOMPILED)) * 0x100000001b3ULL;
-        nr  = b->next;
-    }
-    return sig;
-}
-
+/* The recompiler's blocks as a signature: every live block handed out since
+   the case's codegen_reset() (found as load_case() finds them), on whatever
+   page the case ran it, with its number, start address, physical address,
+   length and the flags that say in which form it was compiled. A run that
+   marked, compiled or dropped a block changes it, and so does one that
+   compiled a block again in another form: a block rewritten under it ends
+   the run compiled, as it began it, but in BYTE_MASK or NO_IMMEDIATES form.
+   A block compiled again in the same form on every run leaves it as it was;
+   both compiled runs then do the same work. */
 static uint64_t
 blocks_sig(void)
 {
-    uint64_t sig = page_blocks_sig(HARNESS_HANDLERS, page_blocks_sig(HARNESS_CODE, 0xcbf29ce484222325ULL));
+    uint64_t sig = 0xcbf29ce484222325ULL;
+    uint32_t low = BLOCK_SIZE;
 
-    return page_blocks_sig(HARNESS_SMM_ENTRY, page_blocks_sig(HARNESS_SMM_ENTRY_CYRIX, sig));
+    while (low > 1 && codeblock[low - 1].dirty_mask)
+        low--;
+    for (uint32_t nr = low; nr < BLOCK_SIZE; nr++) {
+        const codeblock_t *b = &codeblock[nr];
+
+        if (!b->valid)
+            continue;
+        sig = (sig ^ nr) * 0x100000001b3ULL;
+        sig = (sig ^ b->pc) * 0x100000001b3ULL;
+        sig = (sig ^ b->phys) * 0x100000001b3ULL;
+        sig = (sig ^ (uint32_t) b->ins) * 0x100000001b3ULL;
+        sig = (sig ^ (b->flags & (CODEBLOCK_HAS_FPU | CODEBLOCK_STATIC_TOP | CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_HAS_PAGE2 | CODEBLOCK_BYTE_MASK | CODEBLOCK_NO_IMMEDIATES))) * 0x100000001b3ULL;
+    }
+    return sig;
 }
 
 /* The EIP the run's fault was taken at, from the frame its handler left on
