@@ -861,6 +861,12 @@ load_case(const harness_case_t *c, int with_code)
     cpu_flush_pending = 0;
     cycles         = 0;
     cycles_main    = 0;
+    /* The 286/386 prefetch queue, as reset_machine() leaves it: an
+       interpreted instruction charges by what the last interpreted one left
+       there, compiled code leaves it alone, and a run must not inherit it
+       from the run before. */
+    prefetch_flush();
+    prefetch_prefixes = 0;
 
     cpu_state.flags_op = FLAGS_UNKNOWN;
     cpu_state.flags    = (c->eflags & 0x0cd5) | 0x0002;
