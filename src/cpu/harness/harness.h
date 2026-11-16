@@ -90,6 +90,11 @@ extern void harness_tsc_port(uint16_t port);
    instruction boundary the CPU loop tests it at. */
 #define HARNESS_PORT_SMI 0xee
 
+/* A device that remaps memory when this port is read, as some cards do on
+   a port read (the Sigma Color 400's 2DDh): an IN from it flushes the lookup
+   tables on the CPU thread and reads as open bus. */
+#define HARNESS_PORT_FLUSH 0xef
+
 /* Where SMM code starts: SMBASE's reset value plus 8000h, and the Cyrix SMM
    region harness_smi() sets up. A case's handler is code outside the code
    page, and counts in whether a run compiled anything. */

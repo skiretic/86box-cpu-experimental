@@ -10,8 +10,9 @@
  *          memory layer reach for in the rest of the emulator, as stubs.
  *          No device, no interrupt source, no I/O: every port reads as
  *          open bus and every write is dropped, except the RAM writer at
- *          ports 0xe0-0xeb (outb/outw/outl below) and the TSC device at
- *          0xec-0xed (harness.c).
+ *          ports 0xe0-0xeb (outb/outw/outl below), the TSC device at
+ *          0xec-0xed (harness.c) and the remapping device at 0xef (inb/
+ *          inw/inl below).
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -254,6 +255,8 @@ uint8_t
 inb(uint16_t port)
 {
     io_cycle_begin(port, 1, 0, 0);
+    if (port == HARNESS_PORT_FLUSH)
+        flushmmucache_nopc();
     io_cycle = 0;
     return 0xff;
 }
@@ -262,6 +265,8 @@ uint16_t
 inw(uint16_t port)
 {
     io_cycle_begin(port, 2, 0, 0);
+    if (port == HARNESS_PORT_FLUSH)
+        flushmmucache_nopc();
     io_cycle = 0;
     return 0xffff;
 }
@@ -270,6 +275,8 @@ uint32_t
 inl(uint16_t port)
 {
     io_cycle_begin(port, 4, 0, 0);
+    if (port == HARNESS_PORT_FLUSH)
+        flushmmucache_nopc();
     io_cycle = 0;
     return 0xffffffff;
 }
