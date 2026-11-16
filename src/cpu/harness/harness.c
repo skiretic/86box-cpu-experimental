@@ -451,6 +451,7 @@ static char machine_family[64]   = "pentium2_deschutes";
 static char machine_cpu_name[32] = "600";
 static int  machine_fpu_type     = -1;
 static int  machine_dbg486       = 0;
+static int  machine_ram_kb       = HARNESS_RAM_KB;
 
 harness_model_t harness_model;
 
@@ -583,7 +584,7 @@ setup_machine(int softfloat, int fast_fpu_env)
     const CPU *cpus;
     int        n;
 
-    mem_size = HARNESS_RAM_KB;
+    mem_size = machine_ram_kb;
     cpu_f    = cpu_get_family(machine_family);
     if (cpu_f == NULL) {
         fprintf(stderr, "no %s family in the CPU table\n", machine_family);
@@ -1530,6 +1531,7 @@ usage(void)
             "  --nolink             block linking off\n"
             "  --loop2386           every run through exec386_2386(), the loop of a 286 or 386 with\n"
             "                       the recompiler off (a --cpu that runs it); nothing is compiled\n"
+            "  --ram-kb <n>         RAM size in KB, 4096 (default) to 65536, a multiple of 4096\n"
             "  --cpu <family:name>  the CPU table entry, internal family name and CPU name\n"
             "                       (default pentium2_deschutes:600)\n"
             "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default the CPU's own\n"
@@ -2184,6 +2186,15 @@ main(int argc, char **argv)
             nolink = 1;
         } else if (!strcmp(argv[i], "--loop2386")) {
             loop_2386 = 1;
+        } else if (!strcmp(argv[i], "--ram-kb") && i + 1 < argc) {
+            char *end;
+            long  v = strtol(argv[++i], &end, 10);
+
+            if (*end || (v < HARNESS_RAM_KB) || (v > 65536) || (v % 4096)) {
+                fprintf(stderr, "--ram-kb takes 4096 to 65536, a multiple of 4096\n");
+                return 2;
+            }
+            machine_ram_kb = (int) v;
         } else if (!strcmp(argv[i], "--cpu") && i + 1 < argc) {
             int end = 0;
 
