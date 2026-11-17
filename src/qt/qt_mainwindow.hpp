@@ -17,12 +17,14 @@
 
 class MediaMenu;
 class RendererStack;
+class QActionGroup;
 
 namespace Ui {
 class MainWindow;
 }
 
 class MachineStatus;
+class MidiLcdWindow;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -186,9 +188,14 @@ private:
     Ui::MainWindow                *ui;
     std::unique_ptr<MachineStatus> status;
     std::shared_ptr<MediaMenu>     mm;
-    QMenu                         *dynarecMenu = nullptr;
+    QMenu                         *dynarecMenu  = nullptr;
+    QActionGroup                  *midiOutGroup = nullptr;
+    MidiLcdWindow                 *midiLcd      = nullptr;
 
     bool hasKanaLock();
+    void refreshMidiOutMenu();
+    void switchMidiOut(int device, int port = -1);
+    void showMidiLcd(bool show);
     void updateShortcuts();
     void updatePowerOffAction();
     void refreshDisplayRatioActions();

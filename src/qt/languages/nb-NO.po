@@ -247,6 +247,42 @@ msgstr "&Valg…"
 msgid "Sound &gain…"
 msgstr "Lyd&forsterkning…"
 
+msgid "M&IDI output device"
+msgstr ""
+
+msgid "Restart &device"
+msgstr ""
+
+msgid "Send MIDI &command"
+msgstr ""
+
+msgid "&GM System On"
+msgstr ""
+
+msgid "G&S Reset"
+msgstr ""
+
+msgid "&XG System On"
+msgstr ""
+
+msgid "&MT-32 Reset"
+msgstr ""
+
+msgid "All &notes off"
+msgstr ""
+
+msgid "Show MIDI &LCD"
+msgstr ""
+
+msgid "MIDI LCD"
+msgstr ""
+
+msgid "Always on &top"
+msgstr ""
+
+msgid "&Close"
+msgstr ""
+
 msgid "Begin trace"
 msgstr "Start sporing"
 
@@ -301,8 +337,8 @@ msgstr "T&øm"
 msgid "Reload previous image"
 msgstr "Last inn forrige diskfil"
 
-msgid "&Folder…"
-msgstr "&Mappe…"
+msgid "Mount &folder…"
+msgstr "Monter &mappe…"
 
 msgid "Preferences"
 msgstr "Valg"
@@ -784,8 +820,8 @@ msgstr "Båndstasjoner:"
 msgid "ISA RTC:"
 msgstr "ISA RTC:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA-minneutvidelse"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA-minneutvidelse"
 
 msgid "ISA ROM Cards"
 msgstr "ISA ROM-kort"
@@ -2541,6 +2577,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "Startadresse"
 
+msgid "Allow RAM up to the system ROM"
+msgstr ""
+
 msgid "Contiguous Size"
 msgstr "Sammenhengende størrelse"
 
@@ -3741,7 +3780,7 @@ msgstr ""
 msgid "The search is limited to %1 bytes."
 msgstr ""
 
-msgid "Searching memory..."
+msgid "Searching memory…"
 msgstr ""
 
 msgid "The search was cancelled. The selection did not move."
@@ -3777,7 +3816,7 @@ msgstr ""
 msgid "Copy selection (ASCII)"
 msgstr ""
 
-msgid "Fill selection..."
+msgid "Fill selection…"
 msgstr ""
 
 msgid "Copy address"
@@ -3786,7 +3825,7 @@ msgstr ""
 msgid "Disassemble here"
 msgstr ""
 
-msgid "Dump memory from here..."
+msgid "Dump memory from here…"
 msgstr ""
 
 msgid "Memory viewer"
@@ -3816,7 +3855,7 @@ msgstr ""
 msgid "Live update"
 msgstr ""
 
-msgid "Dump..."
+msgid "Dump…"
 msgstr ""
 
 msgid "Commands"
@@ -3861,7 +3900,7 @@ msgstr ""
 msgid "Search downwards from the selection (F3)"
 msgstr ""
 
-msgid "Range..."
+msgid "Range…"
 msgstr ""
 
 msgid "Search within an address range instead of all memory"
@@ -3969,7 +4008,7 @@ msgstr ""
 msgid "Stopped."
 msgstr ""
 
-msgid "Stepping..."
+msgid "Stepping…"
 msgstr ""
 
 msgid "Running."
@@ -4041,8 +4080,10 @@ msgstr ""
 msgid "cleared"
 msgstr ""
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr ""
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] ""
+msgstr[1] ""
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr ""
@@ -4051,9 +4092,6 @@ msgid "Unknown command or invalid arguments. Type help for syntax."
 msgstr ""
 
 msgid "Dump memory"
-msgstr ""
-
-msgid "Browse..."
 msgstr ""
 
 msgid "Start (hex, register or seg:off):"
@@ -4074,7 +4112,7 @@ msgstr ""
 msgid "Only RAM and other directly mapped memory is read. Unmapped and inaccessible bytes are not read; the fill byte is written in their place."
 msgstr ""
 
-msgid "Binary files (*.bin);;All files (*)"
+msgid "Binary files"
 msgstr ""
 
 msgid "The length must be a hex number above 0."
@@ -4086,7 +4124,7 @@ msgstr ""
 msgid "Could not open %1 for writing."
 msgstr ""
 
-msgid "Dumping memory..."
+msgid "Dumping memory…"
 msgstr ""
 
 msgid "Could not write to %1."
@@ -4273,4 +4311,28 @@ msgid "4-port USB 1.1 hub"
 msgstr ""
 
 msgid "USB Mass Storage"
+msgstr ""
+
+msgid "Mount folder as a temporary floppy"
+msgstr ""
+
+msgid "The selected drive does not support folder mounting."
+msgstr ""
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr ""
+
+msgid "The floppy is out of directory entries or space, or a filename cannot be represented on FAT12."
+msgstr ""
+
+msgid "The source contains a filename that cannot be represented on FAT12."
+msgstr ""
+
+msgid "There is not enough memory to create the floppy image."
+msgstr ""
+
+msgid "The source path is too long or its contents could not be read."
+msgstr ""
+
+msgid "Unable to mount folder or ZIP archive"
 msgstr ""

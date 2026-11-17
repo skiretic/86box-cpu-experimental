@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-09-01 17:51+0000\n"
+"PO-Revision-Date: 2026-11-14 02:27+0000\n"
 "Last-Translator: pc1412 <pc1412@gmail.com>\n"
 "Language-Team: Korean <https://weblate.86box.net/projects/86box/86box/ko/>\n"
 "Language: ko-KR\n"
@@ -151,13 +151,13 @@ msgid "4:&3 Integer scale"
 msgstr "4:3 정수배 확대(&3)"
 
 msgid "&Center"
-msgstr ""
+msgstr "중앙(&C)"
 
 msgid "4:3 Cen&ter"
-msgstr ""
+msgstr "4:3 중앙(&T)"
 
 msgid "4:3 Integer scale (&vertical)"
-msgstr ""
+msgstr "4:3 정수 배율(세로)(&V)"
 
 msgid "Inverted VGA monitor"
 msgstr "색상 반전된 VGA 모니터"
@@ -246,6 +246,42 @@ msgstr "환경설정(&P)…"
 msgid "Sound &gain…"
 msgstr "음량 증폭(&G)…"
 
+msgid "M&IDI output device"
+msgstr ""
+
+msgid "Restart &device"
+msgstr ""
+
+msgid "Send MIDI &command"
+msgstr ""
+
+msgid "&GM System On"
+msgstr ""
+
+msgid "G&S Reset"
+msgstr ""
+
+msgid "&XG System On"
+msgstr ""
+
+msgid "&MT-32 Reset"
+msgstr ""
+
+msgid "All &notes off"
+msgstr ""
+
+msgid "Show MIDI &LCD"
+msgstr ""
+
+msgid "MIDI LCD"
+msgstr ""
+
+msgid "Always on &top"
+msgstr ""
+
+msgid "&Close"
+msgstr ""
+
 msgid "Begin trace"
 msgstr "추적 시작하기"
 
@@ -300,8 +336,8 @@ msgstr "비었음(&M)"
 msgid "Reload previous image"
 msgstr "이전 이미지 다시 불러오기"
 
-msgid "&Folder…"
-msgstr "폴더(&F)…"
+msgid "Mount &folder…"
+msgstr "폴더 마운트(&F)…"
 
 msgid "Preferences"
 msgstr "환경설정"
@@ -418,31 +454,31 @@ msgid "Memory:"
 msgstr "메모리:"
 
 msgid "Synchronize with host clock"
-msgstr ""
+msgstr "호스트 시계와 동기화"
 
 msgid "Time zone:"
-msgstr ""
+msgstr "시간대:"
 
 msgid "Local"
-msgstr ""
+msgstr "현지 시간"
 
 msgid "UTC"
-msgstr ""
+msgstr "협정 시계시(UTC)"
 
 msgid "Date:"
-msgstr ""
+msgstr "날짜:"
 
 msgid "Match the host"
-msgstr ""
+msgstr "호스트와 일치"
 
 msgid "Offset the year by:"
-msgstr ""
+msgstr "연도 조정:"
 
 msgid "(currently %1)"
-msgstr ""
+msgstr "(현재 %1)"
 
 msgid "Always use the year:"
-msgstr ""
+msgstr "항상 사용할 연도:"
 
 msgid "Do not synchronize the date"
 msgstr ""
@@ -783,8 +819,8 @@ msgstr "테이프 드라이브:"
 msgid "ISA RTC:"
 msgstr "ISA RTC 카드:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA 메모리 확장 카드"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA 메모리 확장 카드"
 
 msgid "ISA ROM Cards"
 msgstr "ISA ROM 카드"
@@ -2601,6 +2637,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "시작 주소"
 
+msgid "Allow RAM up to the system ROM"
+msgstr ""
+
 msgid "Contiguous Size"
 msgstr "연속 크기"
 
@@ -3810,7 +3849,7 @@ msgstr ""
 msgid "The search is limited to %1 bytes."
 msgstr ""
 
-msgid "Searching memory..."
+msgid "Searching memory…"
 msgstr ""
 
 msgid "The search was cancelled. The selection did not move."
@@ -3846,7 +3885,7 @@ msgstr ""
 msgid "Copy selection (ASCII)"
 msgstr ""
 
-msgid "Fill selection..."
+msgid "Fill selection…"
 msgstr ""
 
 msgid "Copy address"
@@ -3855,7 +3894,7 @@ msgstr ""
 msgid "Disassemble here"
 msgstr ""
 
-msgid "Dump memory from here..."
+msgid "Dump memory from here…"
 msgstr ""
 
 msgid "Memory viewer"
@@ -3885,7 +3924,7 @@ msgstr ""
 msgid "Live update"
 msgstr ""
 
-msgid "Dump..."
+msgid "Dump…"
 msgstr ""
 
 msgid "Commands"
@@ -3930,7 +3969,7 @@ msgstr ""
 msgid "Search downwards from the selection (F3)"
 msgstr ""
 
-msgid "Range..."
+msgid "Range…"
 msgstr ""
 
 msgid "Search within an address range instead of all memory"
@@ -4038,7 +4077,7 @@ msgstr ""
 msgid "Stopped."
 msgstr ""
 
-msgid "Stepping..."
+msgid "Stepping…"
 msgstr ""
 
 msgid "Running."
@@ -4110,8 +4149,9 @@ msgstr ""
 msgid "cleared"
 msgstr ""
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr ""
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] ""
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr ""
@@ -4120,9 +4160,6 @@ msgid "Unknown command or invalid arguments. Type help for syntax."
 msgstr ""
 
 msgid "Dump memory"
-msgstr ""
-
-msgid "Browse..."
 msgstr ""
 
 msgid "Start (hex, register or seg:off):"
@@ -4143,7 +4180,7 @@ msgstr ""
 msgid "Only RAM and other directly mapped memory is read. Unmapped and inaccessible bytes are not read; the fill byte is written in their place."
 msgstr ""
 
-msgid "Binary files (*.bin);;All files (*)"
+msgid "Binary files"
 msgstr ""
 
 msgid "The length must be a hex number above 0."
@@ -4155,7 +4192,7 @@ msgstr ""
 msgid "Could not open %1 for writing."
 msgstr ""
 
-msgid "Dumping memory..."
+msgid "Dumping memory…"
 msgstr ""
 
 msgid "Could not write to %1."
@@ -4342,4 +4379,28 @@ msgid "4-port USB 1.1 hub"
 msgstr ""
 
 msgid "USB Mass Storage"
+msgstr ""
+
+msgid "Mount folder as a temporary floppy"
+msgstr ""
+
+msgid "The selected drive does not support folder mounting."
+msgstr ""
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr ""
+
+msgid "The floppy is out of directory entries or space, or a filename cannot be represented on FAT12."
+msgstr ""
+
+msgid "The source contains a filename that cannot be represented on FAT12."
+msgstr ""
+
+msgid "There is not enough memory to create the floppy image."
+msgstr ""
+
+msgid "The source path is too long or its contents could not be read."
+msgstr ""
+
+msgid "Unable to mount folder or ZIP archive"
 msgstr ""

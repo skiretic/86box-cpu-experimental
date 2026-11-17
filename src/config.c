@@ -1588,7 +1588,7 @@ load_storage_controllers(void)
             }
             scsi_card_current[c] = config_known(scsi_card_get_from_internal_name(p), STRING_UNSUPPORTED_SCSI, p);
         } else
-            scsi_card_current[c] = 0;
+            scsi_card_current[c] = SCSI_CARD_NONE;
     }
 
     p = ini_section_get_string(cat, "fdc", NULL);
@@ -4362,7 +4362,8 @@ save_storage_controllers(void)
     for (c = 0; c < SCSI_CARD_MAX; c++) {
         sprintf(temp, "scsicard_%d", c + 1);
 
-        if (scsi_card_current[c] == 0)
+        if ((scsi_card_current[c] == SCSI_CARD_NONE) ||
+            ((c > 0) && (scsi_card_current[c] == SCSI_CARD_INTERNAL)))
             ini_section_delete_var(cat, temp);
         else
             ini_section_set_string(cat, temp,
@@ -4825,8 +4826,9 @@ save_floppy_and_cdrom_drives(void)
                                    fdd_get_internal_name(fdd_get_type(&drives[c])));
 
         sprintf(temp, "fdd_%02i_fn", c + 1);
-        /* Don't save ioctl:// paths */
-        if (strlen(drv->image_path) == 0 || strstr(drv->image_path, "ioctl://") != NULL) {
+        if (drv->folder_image)
+            ini_section_delete_var(cat, temp);
+        else if (strlen(drv->image_path) == 0 || strstr(drv->image_path, "ioctl://") != NULL) {
             ini_section_delete_var(cat, temp);
 
             drv->read_only = 0;

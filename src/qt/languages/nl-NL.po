@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-11-11 23:18+0000\n"
+"PO-Revision-Date: 2026-11-14 02:27+0000\n"
 "Last-Translator: sharkbyte16 <mjacobs74@protonmail.com>\n"
 "Language-Team: Dutch <https://weblate.86box.net/projects/86box/86box/nl/>\n"
 "Language: nl-NL\n"
@@ -246,6 +246,42 @@ msgstr "&Voorkeuren…"
 msgid "Sound &gain…"
 msgstr "&Geluidsversterking…"
 
+msgid "M&IDI output device"
+msgstr ""
+
+msgid "Restart &device"
+msgstr ""
+
+msgid "Send MIDI &command"
+msgstr ""
+
+msgid "&GM System On"
+msgstr ""
+
+msgid "G&S Reset"
+msgstr ""
+
+msgid "&XG System On"
+msgstr ""
+
+msgid "&MT-32 Reset"
+msgstr ""
+
+msgid "All &notes off"
+msgstr ""
+
+msgid "Show MIDI &LCD"
+msgstr ""
+
+msgid "MIDI LCD"
+msgstr ""
+
+msgid "Always on &top"
+msgstr ""
+
+msgid "&Close"
+msgstr ""
+
 msgid "Begin trace"
 msgstr "Begin traceren"
 
@@ -300,8 +336,8 @@ msgstr "&Leeg"
 msgid "Reload previous image"
 msgstr "Herlaad vorig imagebestand"
 
-msgid "&Folder…"
-msgstr "&Map…"
+msgid "Mount &folder…"
+msgstr "&Map aankoppelen…"
 
 msgid "Preferences"
 msgstr "Voorkeuren"
@@ -786,8 +822,8 @@ msgstr "Tapestations:"
 msgid "ISA RTC:"
 msgstr "ISA RTC:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA-geheugenuitbreiding"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA-geheugenuitbreiding"
 
 msgid "ISA ROM Cards"
 msgstr "ISA ROM-kaart"
@@ -2542,6 +2578,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "Startadres"
 
+msgid "Allow RAM up to the system ROM"
+msgstr ""
+
 msgid "Contiguous Size"
 msgstr "Aaneengesloten grootte"
 
@@ -3409,16 +3448,18 @@ msgid "&Fast forward"
 msgstr "&Snel vooruitspoelen"
 
 msgid "Fast forward at startup"
-msgstr ""
+msgstr "Snel vooruitspoelen vanaf opstarten"
 
 msgid "Start new machines in fast forward"
-msgstr ""
+msgstr "Start nieuwe machines met versneld vooruitspoelen"
 
 msgid "Only affects machines created from now on. Each machine can be changed in its settings, under Machine > Performance."
 msgstr ""
+"Heeft alleen effect op vanaf nu gecreëerde machines. De instellingen van "
+"elke machine kunnen gewijzigd worden onder Machine > Prestaties."
 
 msgid "Fast forward at &startup"
-msgstr ""
+msgstr "Snel vooruitspoelen vanaf op&starten"
 
 msgid "Fast forward"
 msgstr "Snel vooruitspoelen"
@@ -3784,8 +3825,8 @@ msgstr "Er is geen toegewezen geheugen in het opgevraagde bereik."
 msgid "The search is limited to %1 bytes."
 msgstr "De zoekopdracht is beperkt to %1 bytes."
 
-msgid "Searching memory..."
-msgstr "Geheugen aan het doorzoeken..."
+msgid "Searching memory…"
+msgstr "Geheugen aan het doorzoeken…"
 
 msgid "The search was cancelled. The selection did not move."
 msgstr "De zoekopdracht was afgebroken. De selectie is niet verplaatst."
@@ -3822,8 +3863,8 @@ msgstr "Kopieer selectie (hex)"
 msgid "Copy selection (ASCII)"
 msgstr "Kopieer selectie (ASCII)"
 
-msgid "Fill selection..."
-msgstr "Vul selectie..."
+msgid "Fill selection…"
+msgstr "Vul selectie…"
 
 msgid "Copy address"
 msgstr "Kopieer adres"
@@ -3831,8 +3872,8 @@ msgstr "Kopieer adres"
 msgid "Disassemble here"
 msgstr "Hier disassembleren"
 
-msgid "Dump memory from here..."
-msgstr "Dump geheugen vanaf hier..."
+msgid "Dump memory from here…"
+msgstr "Dump geheugen vanaf hier…"
 
 msgid "Memory viewer"
 msgstr "Geheugenviewer"
@@ -3861,8 +3902,8 @@ msgstr "Uitvoeren"
 msgid "Live update"
 msgstr "Live bijwerken"
 
-msgid "Dump..."
-msgstr "Dump..."
+msgid "Dump…"
+msgstr "Dump…"
 
 msgid "Commands"
 msgstr "Opdrachten"
@@ -3910,8 +3951,8 @@ msgstr "Vind volgende"
 msgid "Search downwards from the selection (F3)"
 msgstr "Achteruit zoeken vanaf de selectie (F3)"
 
-msgid "Range..."
-msgstr "Bereik..."
+msgid "Range…"
+msgstr "Bereik…"
 
 msgid "Search within an address range instead of all memory"
 msgstr "Zoek in een adresbereik in plaats van het gehele geheugen"
@@ -4030,8 +4071,8 @@ msgstr "Gestopt na stapsgewijs uitvoeren."
 msgid "Stopped."
 msgstr "Gestopt."
 
-msgid "Stepping..."
-msgstr "Stapsgewijs uitvoeren..."
+msgid "Stepping…"
+msgstr "Stapsgewijs uitvoeren…"
 
 msgid "Running."
 msgstr "Actief."
@@ -4148,8 +4189,10 @@ msgstr "gezet"
 msgid "cleared"
 msgstr "gewist"
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr "%1 onderbrekingspunt(en), lineaire adressen:"
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] "%1 onderbrekingspunt, lineaire adressen:"
+msgstr[1] "%1 onderbrekingspunten, lineaire adressen:"
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr "Pauzeer de processor voordat I/O-poorten benaderd worden."
@@ -4159,9 +4202,6 @@ msgstr "Onbekende opdracht of ongeldige argumenten. Typ help voor de syntax."
 
 msgid "Dump memory"
 msgstr "Dump geheugen"
-
-msgid "Browse..."
-msgstr "Bladeren..."
 
 msgid "Start (hex, register or seg:off):"
 msgstr "Start (hexadecimaal, register of seg:off):"
@@ -4184,8 +4224,8 @@ msgstr ""
 "toegewezen en niet-toegankelijke bytes worden niet uitgelezen; in plaats "
 "daarvan wordt de opvulbyte ingevuld."
 
-msgid "Binary files (*.bin);;All files (*)"
-msgstr "Binaire bestanden (*.bin);;Alle bestanden (*)"
+msgid "Binary files"
+msgstr "Binaire bestanden"
 
 msgid "The length must be a hex number above 0."
 msgstr "De lengte moet een hexadecimaal getal groter dan 0 zijn."
@@ -4196,8 +4236,8 @@ msgstr "De opvulbyte moet een hexadecimaal getal in het bereik 00 en FF zijn."
 msgid "Could not open %1 for writing."
 msgstr "Kon %1 niet openen voor schrijfbewerking."
 
-msgid "Dumping memory..."
-msgstr "Geheugen aan het dumpen..."
+msgid "Dumping memory…"
+msgstr "Geheugen aan het dumpen…"
 
 msgid "Could not write to %1."
 msgstr "Kon niet schrijven naar %1."
@@ -4390,3 +4430,27 @@ msgstr "4-poorts USB 1.1-hub"
 
 msgid "USB Mass Storage"
 msgstr "USB-massaopslag"
+
+msgid "Mount folder as a temporary floppy"
+msgstr ""
+
+msgid "The selected drive does not support folder mounting."
+msgstr ""
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr ""
+
+msgid "The floppy is out of directory entries or space, or a filename cannot be represented on FAT12."
+msgstr ""
+
+msgid "The source contains a filename that cannot be represented on FAT12."
+msgstr ""
+
+msgid "There is not enough memory to create the floppy image."
+msgstr ""
+
+msgid "The source path is too long or its contents could not be read."
+msgstr ""
+
+msgid "Unable to mount folder or ZIP archive"
+msgstr ""

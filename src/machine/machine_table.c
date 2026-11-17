@@ -3185,9 +3185,11 @@ const machine_t machines[] = {
         .net_device               = NULL,
         .aliases                  = { "" }
     },
-    /* Type 8525-004, original 8 MHz 8086 color model with integrated MCGA. */
+    /* Type 8525, original 8 MHz 8086 with integrated MCGA: the monochrome
+       (8525-001) and color (8525-004) models differ in the built-in display,
+       which is the MCGA's monitor type. */
     {
-        .name              = "[8086] IBM PS/2 model 25 (color)",
+        .name              = "[8086] IBM PS/2 model 25",
         .internal_name     = "ibmps2_m25",
         .type              = MACHINE_TYPE_8086,
         .chipset           = MACHINE_CHIPSET_PROPRIETARY,
@@ -3837,12 +3839,13 @@ const machine_t machines[] = {
         .nvrmask                  = 63,
         .jumpered_ecp_dma         = 0,
         .default_jumpered_ecp_dma = -1,
-        .kbc_device               = &kbc_at_device,
-        .kbc_params               = 0x00000000,
+        .kbc_device               = &kbc_at_upi42_device,
+        .kbc_fwvers               = KBC_UPI42_ROM_IBM_1983,
         .nvr_device               = &nvr_at_device,
         .nvr_params               = NVR_AT,
         .sio_device               = NULL,
         .sio_params               = 0x00000000,
+        .kbc_params               = 0x00000000,
         .kbc_p1                   = 0x000004f0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
@@ -23311,7 +23314,7 @@ const machine_t machines[] = {
         .gpio_acpi_handler = NULL,
         .cpu               = {
             .package     = CPU_PKG_SOCKET5_7,
-            .block       = CPU_BLOCK(CPU_Cx6x86MX), /* Sadly it likely abuses cache if using Cyrix 6x86MX and MII CPUs (the latter being what most Socket 7 eMachines PCs used), so they are blocked. */
+            .block       = CPU_BLOCK_NONE,
             .min_bus     = 66666667,
             .max_bus     = 124242424,
             .min_voltage = 2000,
@@ -25302,7 +25305,11 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_NIC | MACHINE_USB, /* Machine has internal SCSI: Adaptec AIC-7890AB (not yet implemented) */
+#ifdef USE_AIC7890
+        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_NIC | MACHINE_USB | MACHINE_SCSI, /* Machine has internal SCSI: Adaptec AIC-7890AB */
+#else
+        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_NIC | MACHINE_USB,
+#endif
         .ram       = {
             .min  = 8192,
             .max  = 1048576,
@@ -25326,6 +25333,9 @@ const machine_t machines[] = {
         .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = &i82558b_onboard_device,
+#ifdef USE_AIC7890
+        .scsi_device              = &aic7890_pci_device,
+#endif
         .aliases                  = { "" }
     },
     /* Has a Winbond W83977EF Super I/O chip with on-chip KBC with AMIKey-2 KBC
@@ -26796,7 +26806,11 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB, /* Machine has internal Adaptec SCSI */
+#ifdef USE_AIC7890
+        .flags     = MACHINE_IDE_DUAL | MACHINE_SCSI | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,
+#else
+        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,
+#endif
         .ram       = {
             .min  = 16384,
             .max  = 2097152,
@@ -26820,12 +26834,15 @@ const machine_t machines[] = {
         .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = NULL,
+#ifdef USE_AIC7890
+        .scsi_device              = &aic7890_pci_device,
+#endif
         .aliases                  = { "" }
     },
     /* Has a Winbond W83977TF Super I/O chip with on-chip KBC with AMIKey-2 KBC
        firmware. */
     {
-        .name              = "[i440GX] Supermicro S2DGE",
+        .name              = "[i440GX] Supermicro S2DGU/DGE",
         .internal_name     = "s2dge",
         .type              = MACHINE_TYPE_SLOT2,
         .chipset           = MACHINE_CHIPSET_INTEL_440GX,
@@ -26845,7 +26862,11 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
+#ifdef USE_AIC7890
+        .flags     = MACHINE_IDE_DUAL | MACHINE_SCSI | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,
+#else
         .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,
+#endif
         .ram       = {
             .min  = 16384,
             .max  = 2097152,
@@ -26869,7 +26890,10 @@ const machine_t machines[] = {
         .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = NULL,
-        .aliases                  = { "" }
+#ifdef USE_AIC7890
+        .scsi_device              = &aic7890_pci_device,
+#endif
+        .aliases                  = { "Supermicro S2DGE", "Supermicro S2DGU", "" }
     },
 
     /* PGA370 machines */

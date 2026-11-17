@@ -47,6 +47,7 @@ add_library(dev OBJECT
     kbc_3270pc.c
     kbc_at.c
     kbc_at_dev.c
+    kbc_at_upi42.c
     kbc_ps2_m25.c
     kbc_tvis.c
     kbc_xt.c
@@ -68,6 +69,7 @@ add_library(dev OBJECT
     mouse_bus.c
     mouse_ibm7690_tablet.c
     mouse_microtouch_touchscreen.c
+    mouse_elo_touchscreen.c
     mouse_ps2.c
     mouse_upc.c
     mouse_serial.c
@@ -139,7 +141,4 @@ if(PCL)
     target_compile_definitions(dev PRIVATE USE_PCL)
 endif()
 
-if(WACOM)
-    target_compile_definitions(dev PRIVATE USE_WACOM)
-    target_sources(dev PRIVATE mouse_wacom_tablet.c)
-endif()
+target_sources(dev PRIVATE mouse_wacom_tablet.c)

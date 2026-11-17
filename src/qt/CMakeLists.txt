@@ -256,6 +256,9 @@ add_library(ui STATIC
     qt_soundgain.cpp
     qt_soundgain.ui
 
+    qt_midilcd.hpp
+    qt_midilcd.cpp
+
     qt_styleoverride.cpp
     qt_styleoverride.hpp
     qt_util.hpp
@@ -387,10 +390,6 @@ endif()
 
 if(RTMIDI)
     target_compile_definitions(ui PRIVATE USE_RTMIDI)
-endif()
-
-if(WACOM)
-    target_compile_definitions(ui PRIVATE USE_WACOM)
 endif()
 
 if(WIN32)
@@ -527,7 +526,7 @@ if (LIBRASHADER)
     if (LIBRASHADER_STATIC)
         if (LIBRASHADER_STATIC_FIND_LIB)
             find_library(LIBRASHADER_STATIC_LIB liblibrashader_capi.a REQUIRED)
-            target_link_libraries(ui PRIVATE "${LIBRASHADER_STATIC_LIB}" ntdll userenv)
+            target_link_libraries(ui PRIVATE "${LIBRASHADER_STATIC_LIB}" ntdll userenv synchronization)
         else()
             target_link_libraries(ui PRIVATE librashader_capi)
         endif()
