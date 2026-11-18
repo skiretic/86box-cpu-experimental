@@ -579,6 +579,7 @@ hard_reset_machine(int first)
         restore_memory();
     step("resetx86");
     resetx86();
+    harness_io_reset();
 }
 
 static void

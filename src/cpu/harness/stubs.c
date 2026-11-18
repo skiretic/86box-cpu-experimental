@@ -8,11 +8,8 @@
  *
  *          CPU test harness: what the CPU core, the recompiler and the
  *          memory layer reach for in the rest of the emulator, as stubs.
- *          No device, no interrupt source, no I/O: every port reads as
- *          open bus and every write is dropped, except the RAM writer at
- *          ports 0xe0-0xeb (outb/outw/outl below), the TSC device at
- *          0xec-0xed (harness.c) and the remapping device at 0xef (inb/
- *          inw/inl below).
+ *          No device and no interrupt source; the ports are io.c's, with
+ *          the harness's devices on them (harness_io.c).
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -33,6 +30,9 @@
 #include <86box/plat.h>
 #include <86box/mem.h>
 #include <86box/thread.h>
+#include <86box/pci.h>
+#include <86box/m_amstrad.h>
+#include <86box/sio.h>
 
 #include "harness.h"
 
@@ -56,8 +56,6 @@ int agp_burst_time    = 1;
 int agp_nonburst_time = 1;
 
 __thread int is_cpu_thread = 1;
-
-uint8_t io_turbo_map[65536 >> 3];
 
 /* cpu_set() writes the I/O delay (pit.c's globals). */
 int io_delay       = 5;
@@ -206,121 +204,65 @@ rivatimer_init(void)
 {
 }
 
-void
-io_handler(uint8_t set, uint16_t base, uint16_t size,
-           uint8_t (*inb)(uint16_t port, void *priv),
-           uint16_t (*inw)(uint16_t port, void *priv),
-           uint32_t (*inl)(uint16_t port, void *priv),
-           void (*outb)(uint16_t port, uint8_t val, void *priv),
-           void (*outw)(uint16_t port, uint16_t val, void *priv),
-           void (*outl)(uint16_t port, uint32_t val, void *priv),
-           void *priv)
-{
-    (void) set;
-    (void) base;
-    (void) size;
-    (void) inb;
-    (void) inw;
-    (void) inl;
-    (void) outb;
-    (void) outw;
-    (void) outl;
-    (void) priv;
-}
-
-/* x86.h's, which this file cannot include whole. */
-extern uint16_t io_port;
-extern uint32_t io_val;
-extern uint8_t  io_size;
-extern uint8_t  io_write;
-extern uint8_t  io_cycle;
-extern uint8_t  io_cycle_smi;
-
-/* The I/O cycle as io.c's port routines record it around their handlers:
-   an SMI raised inside one is an I/O trap, and the Cyrix SMM header gets
-   the cycle's port, size and data. */
-static void
-io_cycle_begin(uint16_t port, int size, int write, uint32_t val)
-{
-    io_port      = port;
-    io_cycle     = 1;
-    io_cycle_smi = 0;
-    io_size      = size;
-    io_write     = write;
-    if (write)
-        io_val = val;
-}
+/* What io.c reads of the board: no PCI configuration window, no Amstrad
+   latch, no Super I/O watchdog. */
+int      pci_flags     = 0;
+uint32_t pci_base      = 0;
+uint32_t pci_size      = 0;
+uint32_t amstrad_latch = 0;
 
 uint8_t
-inb(uint16_t port)
+pci_read(uint16_t port, void *priv)
 {
-    io_cycle_begin(port, 1, 0, 0);
-    if (port == HARNESS_PORT_FLUSH)
-        flushmmucache_nopc();
-    io_cycle = 0;
+    (void) port;
+    (void) priv;
     return 0xff;
 }
 
 uint16_t
-inw(uint16_t port)
+pci_readw(uint16_t port, void *priv)
 {
-    io_cycle_begin(port, 2, 0, 0);
-    if (port == HARNESS_PORT_FLUSH)
-        flushmmucache_nopc();
-    io_cycle = 0;
+    (void) port;
+    (void) priv;
     return 0xffff;
 }
 
 uint32_t
-inl(uint16_t port)
+pci_readl(uint16_t port, void *priv)
 {
-    io_cycle_begin(port, 4, 0, 0);
-    if (port == HARNESS_PORT_FLUSH)
-        flushmmucache_nopc();
-    io_cycle = 0;
+    (void) port;
+    (void) priv;
     return 0xffffffff;
 }
 
-/* A device that writes RAM the way a bus master does, past the CPU's write
-   path, so a case can test that such a write drops the blocks compiled from
-   the bytes it changes. A dword to 0xe0 sets the physical address; a byte,
-   word or dword to 0xe4 writes it there with mem_write{b,w,l}_phys(); a dword
-   to 0xe8 writes it there with mem_write_phys_block(). */
-uint32_t harness_ram_writer_addr;
-
 void
-outb(uint16_t port, uint8_t val)
+pci_write(uint16_t port, uint8_t val, void *priv)
 {
-    io_cycle_begin(port, 1, 1, val);
-    if (port == 0xe4)
-        mem_writeb_phys(harness_ram_writer_addr, val);
-    else if ((port == HARNESS_PORT_TSC_START) || (port == HARNESS_PORT_TSC_END))
-        harness_tsc_port(port);
-    else if (port == HARNESS_PORT_SMI)
-        harness_smi();
-    io_cycle = 0;
+    (void) port;
+    (void) val;
+    (void) priv;
 }
 
 void
-outw(uint16_t port, uint16_t val)
+pci_writew(uint16_t port, uint16_t val, void *priv)
 {
-    io_cycle_begin(port, 2, 1, val);
-    if (port == 0xe4)
-        mem_writew_phys(harness_ram_writer_addr, val);
-    io_cycle = 0;
+    (void) port;
+    (void) val;
+    (void) priv;
 }
 
 void
-outl(uint16_t port, uint32_t val)
+pci_writel(uint16_t port, uint32_t val, void *priv)
 {
-    io_cycle_begin(port, 4, 1, val);
-    if (port == 0xe0)
-        harness_ram_writer_addr = val;
-    else if (port == 0xe4)
-        mem_writel_phys(harness_ram_writer_addr, val);
-    else if (port == 0xe8)
-        mem_write_phys_block(&val, harness_ram_writer_addr, 4);
-    io_cycle = 0;
+    (void) port;
+    (void) val;
+    (void) priv;
+}
+
+void
+fdc37mx0x_watchdog_reset_ext(int origin)
+{
+    (void) origin;
 }
 
 void
@@ -444,11 +386,9 @@ fatal(const char *fmt, ...)
    not built into the harness: a board without one, the 8259 path only,
    no local APIC feature, nothing to sync or reset; lapic_policy.c, the
    pure register rules the CPU's local APIC code sanitizes with, is
-   linked in. The I/O turbo throttle, the NMI line hook and the CPU clock
-   the local APIC timer scales by are the emulator's globals (io.c,
-   nmi.c, video.c). */
+   linked in. The NMI line hook and the CPU clock the local APIC timer
+   scales by are the emulator's globals (nmi.c, video.c). */
 uint8_t ioapic_irq_path_active = 0;
-int     io_turbo_throttle      = 0;
 double  cpuclock               = 0.0;
 int (*nmi_line_level)(void)    = NULL;
 

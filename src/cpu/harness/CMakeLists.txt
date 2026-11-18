@@ -15,8 +15,10 @@
 add_executable(cpu_harness
     harness.c
     harness_dbg.c
+    harness_io.c
     gen.c
     stubs.c
+    ${CMAKE_SOURCE_DIR}/src/io.c
     ${CMAKE_SOURCE_DIR}/src/mem/mem.c
     ${CMAKE_SOURCE_DIR}/src/mem/mmu_2386.c
     ${CMAKE_SOURCE_DIR}/src/mem/smram.c

@@ -65,6 +65,10 @@ extern void harness_dbg_dump(const harness_dbg_state_t *s);
 /* --state-lines: one RUNSTATE line for a run. */
 extern void harness_dbg_state_line(const char *run_name, uint32_t body, const harness_dbg_state_t *s);
 
+/* harness_io.c: io.c's handler table as the harness has it, after every
+   hard reset of the machine. */
+extern void harness_io_reset(void);
+
 /* The port devices' counts since the run began. */
 extern uint32_t harness_port_reads;
 extern uint32_t harness_port_writes;
