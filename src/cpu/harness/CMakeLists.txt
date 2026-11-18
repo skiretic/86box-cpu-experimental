@@ -14,6 +14,7 @@
 
 add_executable(cpu_harness
     harness.c
+    harness_dbg.c
     gen.c
     stubs.c
     ${CMAKE_SOURCE_DIR}/src/mem/mem.c
