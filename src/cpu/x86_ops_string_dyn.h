@@ -848,6 +848,8 @@ opSCASL_a32(UNUSED(uint32_t fetchdat))
     return 0;
 }
 
+/* Like IN and OUT, these end the recompiled block on an I/O breakpoint
+   match, so that #DB is taken right after the instruction (io_op_trap). */
 static int
 opINSB_a16(UNUSED(uint32_t fetchdat))
 {
@@ -875,7 +877,7 @@ opINSB_a16(UNUSED(uint32_t fetchdat))
         DI++;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 1, 0, 1, 0, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opINSB_a32(UNUSED(uint32_t fetchdat))
@@ -904,7 +906,7 @@ opINSB_a32(UNUSED(uint32_t fetchdat))
         EDI++;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 1, 0, 1, 0, 1);
-    return 0;
+    return io_op_trap();
 }
 
 static int
@@ -934,7 +936,7 @@ opINSW_a16(UNUSED(uint32_t fetchdat))
         DI += 2;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 1, 0, 1, 0, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opINSW_a32(UNUSED(uint32_t fetchdat))
@@ -963,7 +965,7 @@ opINSW_a32(UNUSED(uint32_t fetchdat))
         EDI += 2;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 1, 0, 1, 0, 1);
-    return 0;
+    return io_op_trap();
 }
 
 static int
@@ -993,7 +995,7 @@ opINSL_a16(UNUSED(uint32_t fetchdat))
         DI += 4;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 0, 1, 0, 1, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opINSL_a32(UNUSED(uint32_t fetchdat))
@@ -1022,7 +1024,7 @@ opINSL_a32(UNUSED(uint32_t fetchdat))
         EDI += 4;
     CLOCK_CYCLES(15);
     PREFETCH_RUN(15, 1, -1, 0, 1, 0, 1, 1);
-    return 0;
+    return io_op_trap();
 }
 
 static int
@@ -1050,7 +1052,7 @@ opOUTSB_a16(UNUSED(uint32_t fetchdat))
         SI++;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 1, 0, 1, 0, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opOUTSB_a32(UNUSED(uint32_t fetchdat))
@@ -1077,7 +1079,7 @@ opOUTSB_a32(UNUSED(uint32_t fetchdat))
         ESI++;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 1, 0, 1, 0, 1);
-    return 0;
+    return io_op_trap();
 }
 
 static int
@@ -1105,7 +1107,7 @@ opOUTSW_a16(UNUSED(uint32_t fetchdat))
         SI += 2;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 1, 0, 1, 0, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opOUTSW_a32(UNUSED(uint32_t fetchdat))
@@ -1132,7 +1134,7 @@ opOUTSW_a32(UNUSED(uint32_t fetchdat))
         ESI += 2;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 1, 0, 1, 0, 1);
-    return 0;
+    return io_op_trap();
 }
 
 static int
@@ -1160,7 +1162,7 @@ opOUTSL_a16(UNUSED(uint32_t fetchdat))
         SI += 4;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 0, 1, 0, 1, 0);
-    return 0;
+    return io_op_trap();
 }
 static int
 opOUTSL_a32(UNUSED(uint32_t fetchdat))
@@ -1187,5 +1189,5 @@ opOUTSL_a32(UNUSED(uint32_t fetchdat))
         ESI += 4;
     CLOCK_CYCLES(14);
     PREFETCH_RUN(14, 1, -1, 0, 1, 0, 1, 1);
-    return 0;
+    return io_op_trap();
 }

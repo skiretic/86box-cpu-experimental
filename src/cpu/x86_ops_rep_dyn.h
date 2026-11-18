@@ -32,7 +32,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
     static int opREP_INSW_##size(UNUSED(uint32_t fetchdat))                                                       \
     {                                                                                                             \
@@ -67,7 +67,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
     static int opREP_INSL_##size(UNUSED(uint32_t fetchdat))                                                       \
     {                                                                                                             \
@@ -102,7 +102,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
                                                                                                                   \
     static int opREP_OUTSB_##size(UNUSED(uint32_t fetchdat))                                                      \
@@ -137,7 +137,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
     static int opREP_OUTSW_##size(UNUSED(uint32_t fetchdat))                                                      \
     {                                                                                                             \
@@ -171,7 +171,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
     static int opREP_OUTSL_##size(UNUSED(uint32_t fetchdat))                                                      \
     {                                                                                                             \
@@ -205,7 +205,7 @@
             cpu_state.pc = cpu_state.oldpc;                                                                       \
             return 1;                                                                                             \
         }                                                                                                         \
-        return cpu_state.abrt || smi_line;                                                                        \
+        return cpu_state.abrt || smi_line || io_op_trap();                                                        \
     }                                                                                                             \
                                                                                                                   \
     static int opREP_MOVSB_##size(UNUSED(uint32_t fetchdat))                                                      \

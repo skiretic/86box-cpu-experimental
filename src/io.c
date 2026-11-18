@@ -434,7 +434,7 @@ inb_slow(uint16_t port)
     int     m;
     int     delay;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
@@ -512,14 +512,14 @@ inb(uint16_t port)
     io_write = 0;
 
 #ifndef ENABLE_IO_LOG
-    /* One handler and nothing else to do for this read: no breakpoint
+    /* One handler and nothing else to do for this read: no I/O breakpoint
        armed, no PCI configuration window open, no Amstrad latch, a board
        without the I/O delay on served ports, no chipset claim on the port,
        and fast_in (reads bytes, not 0200-0207). Every other read takes
        inb_slow(). The three tests that inb_slow() makes after the handler
        are made before it here, so no byte read handler may write
        amstrad_latch or machine. */
-    if (!(cpu_dr_armed | (pci_flags & (FLAG_CONFIG_IO_ON | FLAG_CONFIG_DEV0_IO_ON)) | (amstrad_latch & 0x80000000) | (machine ^ io_fast_machine) | (io_claimed[port >> 3] & (1 << (port & 7))))) {
+    if (!(cpu_dr_io_armed | (pci_flags & (FLAG_CONFIG_IO_ON | FLAG_CONFIG_DEV0_IO_ON)) | (amstrad_latch & 0x80000000) | (machine ^ io_fast_machine) | (io_claimed[port >> 3] & (1 << (port & 7))))) {
         p = io[port];
         if (p && p->fast_in && !p->next) {
             ret      = p->inb(port, p->priv);
@@ -549,7 +549,7 @@ outb(uint16_t port, uint8_t val)
     io_write = 1;
     io_val  = val;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
@@ -614,7 +614,7 @@ inw(uint16_t port)
     io_size = 2;
     io_write = 0;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
@@ -711,7 +711,7 @@ outw(uint16_t port, uint16_t val)
     io_write = 1;
     io_val  = val;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
@@ -794,7 +794,7 @@ inl(uint16_t port)
     io_size = 4;
     io_write = 0;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
@@ -917,7 +917,7 @@ outl(uint16_t port, uint32_t val)
     io_write = 1;
     io_val  = val;
 
-    if (cpu_dr_armed)
+    if (cpu_dr_io_armed)
         io_debug_check_addr(port);
 
     if ((pci_flags & FLAG_CONFIG_IO_ON) && (port >= pci_base) && (port < (pci_base + pci_size))) {
