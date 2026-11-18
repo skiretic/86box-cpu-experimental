@@ -12,7 +12,7 @@
  *          open bus and every write is dropped, except the RAM writer at
  *          ports 0xe0-0xeb (outb/outw/outl below), the TSC device at
  *          0xec-0xed (harness.c) and the remapping device at 0xef (inb/
- *          inw/inl below).
+ *          inw/inl below); an IN from 0xea reads the TSC (harness_tsc.c).
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -86,11 +86,13 @@ machine_get_internal_name(void)
 }
 
 /* The flat entry has no bus, so prefetch_run() keeps the ROM prefetch
-   multiply of every non-MCA machine. */
+   multiply of every non-MCA machine, unless --mca gives it an MCA bus. */
+int harness_mca;
+
 int
 machine_has_bus(int m, uintptr_t bus_flags)
 {
-    return machines[m].bus_flags & bus_flags;
+    return (machines[m].bus_flags | (harness_mca ? MACHINE_BUS_MCA : 0)) & bus_flags;
 }
 
 int
@@ -254,31 +256,43 @@ io_cycle_begin(uint16_t port, int size, int write, uint32_t val)
 uint8_t
 inb(uint16_t port)
 {
+    uint8_t ret = 0xff;
+
     io_cycle_begin(port, 1, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_TSC_READ)
+        ret = (uint8_t) harness_tsc_read();
     io_cycle = 0;
-    return 0xff;
+    return ret;
 }
 
 uint16_t
 inw(uint16_t port)
 {
+    uint16_t ret = 0xffff;
+
     io_cycle_begin(port, 2, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_TSC_READ)
+        ret = (uint16_t) harness_tsc_read();
     io_cycle = 0;
-    return 0xffff;
+    return ret;
 }
 
 uint32_t
 inl(uint16_t port)
 {
+    uint32_t ret = 0xffffffff;
+
     io_cycle_begin(port, 4, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_TSC_READ)
+        ret = harness_tsc_read();
     io_cycle = 0;
-    return 0xffffffff;
+    return ret;
 }
 
 /* A device that writes RAM the way a bus master does, past the CPU's write

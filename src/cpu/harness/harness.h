@@ -37,9 +37,25 @@
 #define REC_SAVE_EDX  0x24
 #define REC_SAVE_EAX2 0x28
 #define REC_SAVE_EDX2 0x2c
+/* A case's own measurements (harness_tsc.c): with REC_MEAS_MAGIC at
+   REC_MEAS, the four dwords after it are printed per run, apart from the
+   compared state. */
+#define REC_MEAS       0x40
+#define REC_MEAS_MAGIC 0x4d335821 /* "!X3M" */
+#define REC_MEAS_NR    4
 
 #define HARNESS_PAGE 4096
 #define HARNESS_BODY_MAX 3072
+
+/* Pages a case loads at physical addresses of its own choice ("@<phys>"
+   in its hex text, after the body; harness_tsc.c), above the harness's. */
+#define HARNESS_PAGES_MAX 4
+#define HARNESS_PAGES_LOW 0x9000
+
+typedef struct harness_page_t {
+    uint32_t phys;
+    uint8_t  bytes[HARNESS_PAGE];
+} harness_page_t;
 
 /* Selectors in the GDT. */
 #define SEL_CODE32 0x08
@@ -61,6 +77,8 @@ typedef struct harness_case_t {
     uint8_t  body[HARNESS_BODY_MAX];
     int      body_len;
     char     label[128]; /* what the generator drew, for the report */
+    int            pages_nr;
+    harness_page_t pages[HARNESS_PAGES_MAX];
 } harness_case_t;
 
 /* What the selected CPU and FPU have, as the harness and the generator use
@@ -85,6 +103,29 @@ extern harness_model_t harness_model;
 #define HARNESS_PORT_TSC_END   0xed
 
 extern void harness_tsc_port(uint16_t port);
+
+/* The TSC read device: an IN from this port reads the low bits of the
+   time as RDTSC would, on every CPU (harness_tsc.c). */
+#define HARNESS_PORT_TSC_READ 0xea
+
+extern uint32_t harness_tsc_read(void);
+
+extern int  harness_pages_parse(const char *s, harness_case_t *c);
+extern void harness_pages_load(const harness_case_t *c, const uint8_t *ref);
+extern int  harness_pages_own(uint32_t addr);
+extern void harness_pages_capture(uint32_t *bytes, uint32_t *first, uint64_t *hash);
+extern void harness_meas_capture(uint32_t *meas);
+extern void harness_meas_print(const uint32_t *meas, const char *run);
+extern void harness_rom_setup(void);
+
+/* --rom: a 64 KB ROM window at HARNESS_ROM (harness_tsc.c), on the external
+   bus and with ROM wait states, read-only to the guest; a case's extra
+   pages there are loaded into it. --mca: the stub machine has an MCA bus. */
+#define HARNESS_ROM      0xe0000
+#define HARNESS_ROM_SIZE 0x10000
+
+extern int harness_rom;
+extern int harness_mca;
 
 /* The SMI device: an OUT to this port asserts SMI#, taken at the next
    instruction boundary the CPU loop tests it at. */
