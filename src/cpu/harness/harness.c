@@ -67,6 +67,7 @@
 #include "codegen_link.h"
 
 #include "harness.h"
+#include "harness_pg.h"
 
 int harness_verbose = 0;
 
@@ -106,6 +107,7 @@ typedef struct harness_state_t {
     uint32_t code_bytes;  /* code page bytes the run left changed */
     uint32_t code_first;  /* the lowest of them */
     uint64_t code_hash;   /* over the code page as the run left it */
+    harness_pg_t pg;      /* --pg, --watch: zero without them */
     uint8_t  data[HARNESS_PAGE];
 } harness_state_t;
 
@@ -1084,6 +1086,7 @@ capture(harness_state_t *s, int status)
     s->tos       = get32(HARNESS_RECORD + REC_TOS);
     s->tsc_delta = get32(HARNESS_RECORD + REC_TSC_DELTA) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_DELTA + 4) << 32);
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
+    harness_pg_capture(&s->pg);
     capture_stray_pages(s);
     capture_code_page(s);
 }
@@ -1213,6 +1216,7 @@ compare(const harness_state_t *a, const harness_state_t *b)
         diff("fault", a->vector, b->vector);
     if (a->tos != b->tos)
         diff("fault.tos", a->tos, b->tos);
+    harness_pg_compare(&a->pg, &b->pg, diff);
     for (int i = 0; i < HARNESS_PAGE; i++) {
         if (a->data[i] != b->data[i]) {
             snprintf(name, sizeof(name), "data+%03x", i);
@@ -1251,6 +1255,7 @@ dump_state(const harness_state_t *s)
         printf("    stores outside the data page: %u page(s), first at %08x, hash %016" PRIx64 "\n", s->stray_pages, s->stray_first, s->stray_hash);
     if (s->code_bytes)
         printf("    stores to the code page: %u byte(s), first at %08x, hash %016" PRIx64 "\n", s->code_bytes, s->code_first, s->code_hash);
+    harness_pg_dump(&s->pg);
 }
 
 /* Same test as compare(), without the printing. */
@@ -1263,7 +1268,7 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
         || memcmp(a->st_exp, b->st_exp, sizeof(a->st_exp)) || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
         || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash
-        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash;
+        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash || harness_pg_differs(&a->pg, &b->pg);
 }
 
 /* ---- a case ---------------------------------------------------------- */
@@ -1628,6 +1633,7 @@ usage(void)
             "                       (until then it is <stdout file>.part, <stderr file>.part);\n"
             "                       not with --verbose\n",
             harness_gen_class_names(), MAX_RUNS);
+    harness_pg_usage();
 }
 
 /* The lines that end a run's output. */
@@ -2310,6 +2316,9 @@ main(int argc, char **argv)
             harness_verbose = 1;
         } else if (!strcmp(argv[i], "--list") && i + 1 < argc) {
             list = argv[++i];
+        } else if ((r = harness_pg_option(argc, argv, &i))) {
+            if (r < 0)
+                return 2;
         } else {
             usage();
             return 2;

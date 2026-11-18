@@ -35,6 +35,7 @@
 #include <86box/thread.h>
 
 #include "harness.h"
+#include "harness_pg.h"
 
 /* Globals the core reads; set by the harness before cpu_set(). */
 int      cpu             = 0;
@@ -257,6 +258,8 @@ inb(uint16_t port)
     io_cycle_begin(port, 1, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_FLUSH_OTHER)
+        harness_flush_other();
     io_cycle = 0;
     return 0xff;
 }
@@ -267,6 +270,8 @@ inw(uint16_t port)
     io_cycle_begin(port, 2, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_FLUSH_OTHER)
+        harness_flush_other();
     io_cycle = 0;
     return 0xffff;
 }
@@ -277,6 +282,8 @@ inl(uint16_t port)
     io_cycle_begin(port, 4, 0, 0);
     if (port == HARNESS_PORT_FLUSH)
         flushmmucache_nopc();
+    else if (port == HARNESS_PORT_FLUSH_OTHER)
+        harness_flush_other();
     io_cycle = 0;
     return 0xffffffff;
 }
