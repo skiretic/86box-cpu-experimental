@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-11-16 18:42+0000\n"
-"Last-Translator: Alexander Babikov <lemondrops358@gmail.com>\n"
+"PO-Revision-Date: 2026-11-18 18:28+0000\n"
+"Last-Translator: Nelson Kerber Hennemann Filho <nelsonhf@outlook.com>\n"
 "Language-Team: Portuguese (Brazil) <https://weblate.86box.net/projects/86box/"
 "86box/pt_BR/>\n"
 "Language: pt-BR\n"
@@ -52,7 +52,7 @@ msgstr "Ocultar barra de &status"
 msgid "Hide &toolbar"
 msgstr "Ocultar barra de &ferramentas"
 
-msgid "&Resizeable window"
+msgid "&Resizable window"
 msgstr "&Janela redimensionável"
 
 msgid "R&emember size && position"
@@ -272,16 +272,16 @@ msgid "All &notes off"
 msgstr "Desligar todas &notas"
 
 msgid "Show MIDI &LCD"
-msgstr ""
+msgstr "Mostrar &LCD MIDI"
 
 msgid "MIDI LCD"
-msgstr ""
+msgstr "LCD MIDI"
 
 msgid "Always on &top"
-msgstr ""
+msgstr "Sempre &visível"
 
 msgid "&Close"
-msgstr ""
+msgstr "&Fechar"
 
 msgid "Begin trace"
 msgstr "Inicio do rastreamento"
@@ -450,6 +450,15 @@ msgstr "Estados de espera:"
 
 msgid "MB"
 msgstr "MB"
+
+msgid "GB"
+msgstr "GB"
+
+msgid "%1 MB"
+msgstr "%1 MB"
+
+msgid "%1 GB"
+msgstr "%1 GB"
 
 msgid "Memory:"
 msgstr "Memória:"
@@ -2583,7 +2592,7 @@ msgid "Start Address"
 msgstr "Endereço inicial"
 
 msgid "Allow RAM up to the system ROM"
-msgstr ""
+msgstr "Permitir RAM até a ROM do sistema"
 
 msgid "Contiguous Size"
 msgstr "Tamanho contíguo"
@@ -4304,7 +4313,7 @@ msgstr "Desligado (apenas com +VDR=1)"
 msgid "Caller ID between emulator instances (enable on both)"
 msgstr "ID do chamador entre instâncias do emulador (habilitado em ambos)"
 
-msgid "Caller ID sent when dialling (number,name)"
+msgid "Caller ID sent when dialing (number,name)"
 msgstr "ID do chamador enviado quando discando (número,nome)"
 
 msgid "Network to guest queue limit (back-pressure)"
@@ -4364,17 +4373,64 @@ msgstr "O drive selecionado não suporta montagem de pasta."
 msgid "The contents exceed the capacity of the configured floppy drive."
 msgstr "O conteúdo excede a capacidade do drive de disquete configurado."
 
-msgid "The floppy is out of directory entries or space, or a filename cannot be represented on FAT12."
-msgstr "O disquete está sem espaço ou entradas de diretório, ou um nome de arquivo não pode ser representado em FAT12."
+msgid "Mount folder as a temporary removable disk"
+msgstr "Montar pasta como um disco removível temporário"
 
-msgid "The source contains a filename that cannot be represented on FAT12."
-msgstr "A fonte contém um nome de arquivo que não pode ser representado em FAT12."
+msgid "Unable to mount folder or archive"
+msgstr "Não foi possível montar a pasta ou arquivo"
 
-msgid "There is not enough memory to create the floppy image."
-msgstr "Não há memória suficiente para criar uma imagem de disquete."
+msgid "The contents don't fit on any medium the drive takes, or a file is 4 GB or larger."
+msgstr ""
+"O conteúdo não cabe em qualquer mídia que o drive aceita, ou um arquivo é de "
+"4GB ou maior."
 
-msgid "The source path is too long or its contents could not be read."
-msgstr "O caminho de origem é muito longo ou seu conteúdo não pode ser lido."
+msgid "There are too many files in the top folder for the root directory of the medium."
+msgstr "Há muitos arquivos na pasta principal para o diretório root da mídia."
 
-msgid "Unable to mount folder or ZIP archive"
-msgstr "Não foi possível montar a pasta ou arquivo ZIP"
+msgid "The temporary image could not be written."
+msgstr "A imagem temporária não pode ser escrita."
+
+msgid "There is not enough memory to build the image."
+msgstr "Não há memória suficiente para criar a imagem."
+
+msgid "The folder or archive could not be read."
+msgstr "Não foi possível ler a pasta ou o arquivo."
+
+msgid "Archives"
+msgstr "Arquivos"
+
+msgid "New USB flash drive"
+msgstr "Novo disco flash USB"
+
+msgid "&New USB flash drive…"
+msgstr "&Novo disco flash USB…"
+
+msgid "&Unplug"
+msgstr "&Desconectar"
+
+msgid "&Unplug %1"
+msgstr "&Desconectar %1"
+
+msgid "Size:"
+msgstr "Tamanho:"
+
+msgid "Custom size:"
+msgstr "Tamanho personalizado:"
+
+msgid "None (blank)"
+msgstr "Nenhum (em branco)"
+
+msgid "FAT16"
+msgstr "FAT16"
+
+msgid "FAT32"
+msgstr "FAT32"
+
+msgid "Format:"
+msgstr "Formato:"
+
+msgid "Could not create %1."
+msgstr "Não foi possível criar %1."
+
+msgid "%1 already exists. Replace it?"
+msgstr "%1 já existe. Substituir?"

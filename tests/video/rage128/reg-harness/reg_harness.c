@@ -127,6 +127,16 @@ wr(rage128_t *dev, uint32_t off, uint32_t val)
     r128_vram_hnew_all(dev);
 }
 
+/* A register write alone, for a test that pokes nothing into svga.vram
+   and asserts that staged texture levels stay cached: the mark wr()
+   leaves is a store report, and a store report ends every cached level
+   at the next copy. */
+static void
+wr_nomark(rage128_t *dev, uint32_t off, uint32_t val)
+{
+    rage128_reg_write(dev, off, val, 0xffffffffu);
+}
+
 static void
 pci_wr8(int addr, uint8_t val)
 {
@@ -2738,6 +2748,14 @@ flush_sync(rage128_t *dev)
     /* tests poke svga.vram between a draw's capture and this flush, which
        records it: mark those stores for the GPU mirror, as wr() does */
     r128_vram_hnew_all(dev);
+    rage128_raster_flush(dev);
+    gpu_sync(dev);
+}
+
+/* The same without the store report, for the tests wr_nomark serves. */
+static void
+flush_sync_nomark(rage128_t *dev)
+{
     rage128_raster_flush(dev);
     gpu_sync(dev);
 }
@@ -11159,7 +11177,7 @@ vectors_stage_arena(rage128_t *dev)
                ts->n_rec_draw == draw0);
 
     /* B: a different texture bump-allocates past the cached one. */
-    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
     rage128_raster_state_capture(dev, &rs);
     off2 = rs.prim_stage_off[0];
     check_true("gpu arena: new level bump-allocates past the cache",
@@ -11167,7 +11185,7 @@ vectors_stage_arena(rage128_t *dev)
 
     /* C: a flush must not reclaim an arena with live cached levels. */
     flush0 = ts->n_rec_flush;
-    flush_sync(dev);
+    flush_sync_nomark(dev);
     rage128_raster_state_capture(dev, &rs);
     check_true("gpu arena: cache survives a flush barrier",
                ts->used != 0 && ts->n_rec_flush == flush0
@@ -11194,7 +11212,7 @@ vectors_stage_arena(rage128_t *dev)
     rage128_raster_state_capture(dev, &rs);
     check_true("gpu arena: a store into one level keeps the other cached",
                rs.prim_stage_off[0] == off2 && ts->n_hit == hit0 + 1);
-    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TL_TEX | (2u << 30));
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TL_TEX | (2u << 30));
     rage128_raster_state_capture(dev, &rs);
     off3 = rs.prim_stage_off[0];
     check_true("gpu arena: killed level re-stages fresh",
@@ -11215,7 +11233,7 @@ vectors_stage_arena(rage128_t *dev)
     rage128_raster_state_capture(dev, &rs);
     check_true("gpu arena: a store between two cached levels kills neither",
                ts->n_kill == kill0 && rs.prim_stage_off[0] == off3);
-    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
     rage128_raster_state_capture(dev, &rs);
     check_true("gpu arena: control: the second level still hits",
                rs.prim_stage_off[0] == off2);
@@ -11233,7 +11251,7 @@ vectors_stage_arena(rage128_t *dev)
 
     /* E: idle AND cache-free, the flush reclaim is free again. */
     flush0 = ts->n_rec_flush;
-    flush_sync(dev);
+    flush_sync_nomark(dev);
     check_true("gpu arena: idle cache-free flush reclaims the arena",
                ts->used == 0 && ts->n_rec_flush == flush0 + 1);
     rage128_raster_state_capture(dev, &rs);
@@ -11248,9 +11266,9 @@ vectors_stage_arena(rage128_t *dev)
         uint64_t hits0;
         int      same = 0;
 
-        wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00004444);
+        wr_nomark(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00004444);
         for (int i = 0; i < 300; i++) {
-            wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
+            wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
                (SA_BAND + (uint32_t) i * 1024u) | (2u << 30));
             rage128_raster_state_capture(dev, &rs);
             off_first[i] = rs.prim_stage_off[0];
@@ -11258,7 +11276,7 @@ vectors_stage_arena(rage128_t *dev)
         used0 = ts->used;
         hits0 = ts->n_hit;
         for (int i = 0; i < 300; i++) {
-            wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
+            wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
                (SA_BAND + (uint32_t) i * 1024u) | (2u << 30));
             rage128_raster_state_capture(dev, &rs);
             same += rs.prim_stage_off[0] == off_first[i]
@@ -11272,29 +11290,29 @@ vectors_stage_arena(rage128_t *dev)
         rage128_gpu_2d_barrier(dev, SA_BAND, 300u * 1024u, 1);
         check32("gpu arena: a store over the band drops every level in it",
                 ts->ent_dead, 300);
-        wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
-        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
+        wr_nomark(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+        wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), SA_TEX2 | (2u << 30));
         rage128_raster_state_capture(dev, &rs);
     }
 
     /* F: rendering into the texture kills the cache (capture-time RT
        plans are the third hook). */
     kill0 = ts->n_kill;
-    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (SA_TEX2 >> 5));
+    wr_nomark(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (SA_TEX2 >> 5));
     rage128_raster_state_capture(dev, &rs);
     check_true("gpu arena: rendering onto the source kills the cache",
                ts->n_kill == kill0 + 1);
-    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    wr_nomark(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
 
     /* A queued segment pins the offsets: flush must not reclaim even
        after the cache is killed. */
     rage128_gpu_2d_barrier(dev, SA_TEX2 + 128u, 4, 1); /* cache dead */
     harness_gpu_fab_stage_ref(fab, 1);
-    flush_sync(dev);
+    flush_sync_nomark(dev);
     check_true("gpu arena: referenced arena is not reclaimed at a flush",
                ts->used != 0);
     harness_gpu_fab_stage_ref(fab, 0);
-    flush_sync(dev);
+    flush_sync_nomark(dev);
     check_true("gpu arena: reclaim lands once the reference retires",
                ts->used == 0);
 
@@ -11311,7 +11329,7 @@ vectors_stage_arena(rage128_t *dev)
 
         flush0 = ts->n_rec_flush;
         for (int i = 0; i < 80 && !wrapped; i++) {
-            wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
+            wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
                (SA_BAND + (uint32_t) i * 16384u) | (2u << 30));
             rage128_raster_state_capture(dev, &rs);
             if (i > 0 && rs.prim_stage_off[0] == 0)
@@ -11339,7 +11357,8 @@ vectors_stage_arena(rage128_t *dev)
         int            i, hit5 = 1, bytes5 = 1;
 
         for (i = 0; i < 400 && ts->n_rec_wrap < wraps0 + 2; i++) {
-            wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + (uint32_t) i * 16384u) | (2u << 30));
+            wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0),
+                      (band + (uint32_t) i * 16384u) | (2u << 30));
             rage128_raster_state_capture(dev, &rs);
             if (i == 5) {
                 off5 = rs.prim_stage_off[0];
@@ -11349,7 +11368,7 @@ vectors_stage_arena(rage128_t *dev)
             if (ts->n_rec_wrap == wraps0 + 1) {
                 if (!used1)
                     used1 = ts->used;
-                wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 5u * 16384u) | (2u << 30));
+                wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 5u * 16384u) | (2u << 30));
                 hit0 = ts->n_hit;
                 rage128_raster_state_capture(dev, &rs);
                 hit5 &= ts->n_hit == hit0 + 1;
@@ -11362,12 +11381,12 @@ vectors_stage_arena(rage128_t *dev)
                    used1 && used1 <= 4u * 16384u);
         check_true("gpu arena: the kept level hits through the next pass, bytes intact",
                    off5 != R128_TEX_STAGE_NONE && hit5 && bytes5);
-        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 5u * 16384u) | (2u << 30));
+        wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 5u * 16384u) | (2u << 30));
         hit0 = ts->n_hit;
         rage128_raster_state_capture(dev, &rs);
         check_true("gpu arena: a level used in the pass survives the second wrap",
                    ts->n_hit == hit0 + 1);
-        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 7u * 16384u) | (2u << 30));
+        wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (band + 7u * 16384u) | (2u << 30));
         hit0 = ts->n_hit;
         rage128_raster_state_capture(dev, &rs);
         check_true("gpu arena: a level unused for a whole pass is dropped at the wrap",
@@ -11377,16 +11396,17 @@ vectors_stage_arena(rage128_t *dev)
     fab_out(dev);
     harness_gpu_fab_free(fab);
 
-    /* Serial CPU control: the backend gone, capture recycles per draw
-       and nothing caches. */
+    /* Serial CPU control: the backend gone, a level in local memory is
+       kept for the batch, so the later captures copy nothing and recycle
+       nothing, and nothing joins the cache across batches. */
     wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TL_TEX | (2u << 30));
     rage128_raster_state_capture(dev, &rs); /* prime: arena holds a level */
     draw0 = ts->n_rec_draw;
     rage128_raster_state_capture(dev, &rs);
     off1 = rs.prim_stage_off[0];
     rage128_raster_state_capture(dev, &rs);
-    check_true("gpu arena: serial CPU capture still recycles per draw",
-               rs.prim_stage_off[0] == off1 && ts->n_rec_draw == draw0 + 2);
+    check_true("gpu arena: serial CPU capture keeps a local level for the batch",
+               rs.prim_stage_off[0] == off1 && ts->n_rec_draw == draw0);
     check_true("gpu arena: serial CPU stagings never join the cache",
                ts->src_lo == ts->src_hi);
 
@@ -20456,6 +20476,459 @@ vectors_lanegap_gpu_pricing(rage128_t *dev)
     wr(dev, RAGE128_WINDOW_XY_OFFSET, 0);
 }
 
+/* ------------------------------------------------------------------ */
+/* Render-to-texture draws that sample a staged copy. A tiled level the
+   transform covers is copied, detiled, into the texture staging arena
+   at state capture, before the draw's first pixel, in every lane; its
+   pixels sample that copy, never the bytes the draw itself writes. Such
+   a draw cannot see its own stores through the texture, so in the GPU
+   lane it runs as an ordinary parallel draw, at any size, instead of as
+   a one-lane serial run. A stage with any reachable level read from
+   VRAM keeps the serial run, and so does a color target overlapping
+   its own Z. Probe rows read admission's answer on a fabricated
+   backend; byte rows draw a feedback footprint (each pixel samples the
+   texel one row up, which the draw writes) and require the pre-draw
+   image moved down one row, in every lane. */
+/* ------------------------------------------------------------------ */
+#define RTS_C 0x00c00000u /* 64 px ARGB8888 color target, tiled, 256 B/row */
+#define RTS_Z 0x00c20000u /* 16-bit Z, 64 px = 128 B/row                    */
+#define RTS_B 0x00d00000u /* 256 px ARGB8888 color target, tiled, 1 KB/row  */
+
+/* Context: a tiled px-wide ARGB8888 target at dst with a rows-high
+   scissor, stage 0 a px x px tiled ARGB8888 level at tex whose combine
+   outputs the texel, Z at RTS_Z (16-bit, ALWAYS, enabled by the caller),
+   nearest filtering. */
+static void
+rts_ctx(rage128_t *dev, uint32_t dst, uint32_t px, uint32_t rows, uint32_t tex)
+{
+    uint32_t lg = px == 256 ? 8u : 6u;
+
+    flush_sync(dev);
+    wr(dev, 0x16e8, 0x1fff1fff);
+    wr(dev, 0x16ec, 0x00000000);
+    wr(dev, 0x16f0, ((rows - 1u) << 16) | (px - 1u));
+    wr(dev, 0x16c0, 0x00000003);
+    wr(dev, 0x16cc, 0xffffffff);
+    wr(dev, 0x1660, 0x00000000);
+    wr(dev, 0x16c4, 0x00000006);
+    wr(dev, RAGE128_MISC_3D_STATE_CNTL, 0x00000000);
+    wr(dev, RAGE128_PLANE_3D_MASK_C, 0xffffffff);
+    wr(dev, RAGE128_SETUP_CNTL, 0x00000020);
+    wr(dev, RAGE128_WINDOW_XY_OFFSET, 0x00000000);
+    wr(dev, RAGE128_PM4_VC_FPU_SETUP,
+       RAGE128_FPU_BACKFACE_SOLID | RAGE128_FPU_FRONTFACE_SOLID | RAGE128_FPU_COLOR_GOURAUD);
+    /* TEX_MAP_AEN [30]: the texel's own alpha reaches the pixel */
+    wr(dev, RAGE128_SCALE_3D_CNTL, 1u << 30);
+    wr(dev, RAGE128_DST_PITCH_OFFSET_C, (1u << 31) | ((px / 8u) << 21) | (dst >> 5));
+    wr(dev, RAGE128_Z_OFFSET_C, RTS_Z);
+    wr(dev, RAGE128_Z_PITCH_C, 0x00000008);
+    wr(dev, RAGE128_Z_STEN_CNTL_C, 0x00000070);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, COMB_DISABLE_COMB(0, 0, 4, 4, 0, 6, 2));
+    wr(dev, RAGE128_SEC_TEX_COMBINE_CNTL_C, COMB_DISABLE_COMB(0, 0, 4, 4, 0, 6, 2));
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, 6u << 16);
+    wr(dev, RAGE128_SEC_TEX_CNTL_C, 6u << 16);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, (lg << 8) | lg);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), tex | (2u << 30));
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000010);
+}
+
+static void
+rts_restore(rage128_t *dev)
+{
+    flush_sync(dev);
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000000);
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_SEC_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_SEC_TEX_COMBINE_CNTL_C, 0x00000000);
+    for (int s = 0; s < 2; s++) {
+        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(s), 0);
+        wr(dev, RAGE128_SEC_TEX_OFFSET_C(s), 0);
+    }
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000000);
+    wr(dev, RAGE128_Z_STEN_CNTL_C, 0x00000000);
+    wr(dev, 0x16f0, 0x1fff1fff);
+    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+}
+
+/* One w x h right triangle at the origin through admission; kill >= 0
+   marks stage 0's level kill as read from VRAM after the capture, which
+   is what a staging that found no room leaves behind. */
+static int
+rts_probe(rage128_t *dev, float w, float h, int kill, harness_gpu_alias_t *al,
+          int *staged0)
+{
+    static rage128_raster_state_t rs;
+    r3d_vtx_t                     v[3];
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 3; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xff808080u;
+    }
+    v[1].x = w;
+    v[1].s = 1.0f;
+    v[2].y = h;
+    v[2].t = 1.0f;
+    rage128_raster_state_capture(dev, &rs);
+    *staged0 = rs.prim_stage_off[rs.d.sh[0].top] != R128_TEX_STAGE_NONE;
+    if (kill >= 0)
+        rs.prim_stage_off[kill] = R128_TEX_STAGE_NONE;
+    return harness_gpu_alias_probe(dev, &rs, &v[0], &v[1], &v[2], al);
+}
+
+static void
+rts_print(const char *leg, const harness_gpu_alias_t *al)
+{
+    printf("gpu rtt-staged: %s: accepted=%d serial=%d cz-ser=%llu rtt-ser=%llu"
+           " cz-rej=%llu rtt-rej=%llu rtt-stg=%llu px=%llu\n",
+           leg, al->accepted, al->serial, (unsigned long long) al->ser[0],
+           (unsigned long long) al->ser[1], (unsigned long long) al->rej[0],
+           (unsigned long long) al->rej[1], (unsigned long long) al->stg,
+           (unsigned long long) al->need_px);
+}
+
+/* Parallel: accepted, a non-serial run, nothing counted serial or
+   refused, one draw counted as exempted. */
+static int
+rts_parallel(const harness_gpu_alias_t *al)
+{
+    return al->accepted && al->serial == 0 && !al->ser[0] && !al->ser[1]
+        && !al->rej[0] && !al->rej[1] && al->stg == 1;
+}
+
+/* Serial: a serial run, counted under k, and not exempted. */
+static int
+rts_serial(const harness_gpu_alias_t *al, int k)
+{
+    return al->accepted && al->serial == 1 && al->ser[k] == 1 && !al->ser[!k]
+        && !al->rej[0] && !al->rej[1] && al->stg == 0;
+}
+
+/* Fill [base, base + len) with distinct words and report the store the
+   way a guest store is reported, so no cached staging survives it. */
+static void
+rts_seed(rage128_t *dev, uint32_t base, uint32_t len, uint32_t salt)
+{
+    for (uint32_t i = 0; i < len / 4u; i++)
+        *(uint32_t *) &dev->svga.vram[base + i * 4u] = (i * 0x9e3779b1u) ^ salt;
+    if (dev->gpu)
+        rage128_gpu_cpu_barrier(dev, base, len, 1);
+}
+
+/* Byte row: the px x px tiled level at tex is sampled by a quad over
+   target rows 1..rows, pixel (x, y) reading texel (x, y - 1). Every
+   covered pixel must hold the texel from before the draw; a lane that
+   sampled live would read a texel the quad already rewrote. Under
+   R128_GPU=verify the backend's own replay must also agree. */
+static void
+rts_bytes(rage128_t *dev, const char *leg, uint32_t dst, uint32_t px,
+          uint32_t rows, uint32_t tex, int z)
+{
+    static rage128_raster_state_t rs;
+    static uint8_t                pre[256 * 256 * 4], post[256 * 257 * 4];
+    r3d_vtx_t                     v[6];
+    uint32_t                      pitch = px * 4u, bad = 0;
+    uint64_t                      s0 = 0, b0 = 0, s1 = 0, b1 = 0;
+    int                           gv;
+    char                          what[160];
+    static const float            qx[6] = { 0, 1, 0, 1, 1, 0 };
+    static const float            qy[6] = { 0, 0, 1, 0, 1, 1 };
+
+    rts_ctx(dev, dst, px, rows + 1u, tex);
+    if (z)
+        wr(dev, RAGE128_TEX_CNTL_C, 0x00000013); /* Z_EN | Z_WR | TEX_EN */
+    rts_seed(dev, dst, pitch * (rows + 1u), 0x5a000000u);
+    rts_seed(dev, tex, pitch * px, 0x3c000000u);
+    if (z)
+        rts_seed(dev, RTS_Z, 128u * (rows + 1u), 0x3c000000u ^ 0x00a50000u);
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, tex, pitch, 0, pre, pitch * px, 0);
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 6; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xff808080u;
+        v[k].x       = qx[k] * (float) px;
+        v[k].y       = 1.0f + qy[k] * (float) rows;
+        v[k].s       = qx[k];
+        v[k].t       = qy[k] * (float) rows / (float) px;
+    }
+    gv = harness_gpu_verify_stats(dev, &s0, &b0);
+    rage128_raster_state_capture(dev, &rs);
+    rage128_raster_submit_tri(dev, &rs, &v[0], &v[1], &v[2]);
+    rage128_raster_submit_tri(dev, &rs, &v[3], &v[4], &v[5]);
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, dst, pitch, 0, post, pitch * (rows + 1u), 0);
+    for (uint32_t y = 1; y <= rows; y++)
+        for (uint32_t x = 0; x < px; x++)
+            bad += memcmp(post + y * pitch + x * 4u, pre + (y - 1u) * pitch + x * 4u, 4) != 0;
+    snprintf(what, sizeof(what), "gpu rtt-staged: %s: every pixel holds the pre-draw texel", leg);
+    check32(what, bad, 0);
+    if (gv && harness_gpu_verify_stats(dev, &s1, &b1)) {
+        snprintf(what, sizeof(what), "gpu rtt-staged: %s: gpu verify mismatched nothing", leg);
+        check_true(what, b1 == b0);
+        snprintf(what, sizeof(what), "gpu rtt-staged: %s: the draw reached the GPU kernel", leg);
+        check_true(what, s1 > s0);
+    }
+    printf("gpu rtt-staged: %s bytes: wrong=%u verify segments +%llu mismatched +%llu\n",
+           leg, bad, (unsigned long long) (s1 - s0), (unsigned long long) (b1 - b0));
+}
+
+/* Two byte rows in sequence: draw A, then draw B captured after it,
+   each sampling the texel one row up of the same px x px tiled target.
+   B's staged copy is taken when B's state is captured, after A, so it
+   must hold A's pixels: in the overlap every pixel ends up two rows
+   down from the pre-draw image. A copy taken while A's stores are
+   still queued would hold the pre-draw bytes and leave a one-row
+   shift. */
+static void
+rts_bytes2(rage128_t *dev, const char *leg, uint32_t dst, uint32_t px,
+           uint32_t rows)
+{
+    static rage128_raster_state_t rs;
+    static uint8_t                pre[256 * 257 * 4], mid[256 * 257 * 4],
+        post[256 * 257 * 4];
+    r3d_vtx_t                     v[6];
+    uint32_t                      pitch = px * 4u, bad = 0;
+    uint64_t                      s0 = 0, b0 = 0, s1 = 0, b1 = 0;
+    int                           gv;
+    char                          what[160];
+    static const float            qx[6] = { 0, 1, 0, 1, 1, 0 };
+    static const float            qy[6] = { 0, 0, 1, 0, 1, 1 };
+
+    rts_ctx(dev, dst, px, rows + 1u, dst);
+    rts_seed(dev, dst, pitch * (rows + 1u), 0x69000000u);
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, dst, pitch, 0, pre, pitch * (rows + 1u), 0);
+    /* the image after A: rows 1..rows from one row up, row 0 kept */
+    memcpy(mid, pre, pitch);
+    for (uint32_t y = 1; y <= rows; y++)
+        memcpy(mid + y * pitch, pre + (y - 1u) * pitch, pitch);
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 6; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xff808080u;
+        v[k].x       = qx[k] * (float) px;
+        v[k].y       = 1.0f + qy[k] * (float) rows;
+        v[k].s       = qx[k];
+        v[k].t       = qy[k] * (float) rows / (float) px;
+    }
+    gv = harness_gpu_verify_stats(dev, &s0, &b0);
+    for (int d = 0; d < 2; d++) {
+        rage128_raster_state_capture(dev, &rs);
+        rage128_raster_submit_tri(dev, &rs, &v[0], &v[1], &v[2]);
+        rage128_raster_submit_tri(dev, &rs, &v[3], &v[4], &v[5]);
+    }
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, dst, pitch, 0, post, pitch * (rows + 1u), 0);
+    for (uint32_t y = 1; y <= rows; y++)
+        for (uint32_t x = 0; x < px; x++)
+            bad += memcmp(post + y * pitch + x * 4u, mid + (y - 1u) * pitch + x * 4u, 4) != 0;
+    snprintf(what, sizeof(what),
+             "gpu rtt-staged: %s: the second draw samples the first one's pixels", leg);
+    check32(what, bad, 0);
+    if (gv && harness_gpu_verify_stats(dev, &s1, &b1)) {
+        snprintf(what, sizeof(what), "gpu rtt-staged: %s: gpu verify mismatched nothing", leg);
+        check_true(what, b1 == b0);
+    }
+    printf("gpu rtt-staged: %s bytes: wrong=%u verify segments +%llu mismatched +%llu\n",
+           leg, bad, (unsigned long long) (s1 - s0), (unsigned long long) (b1 - b0));
+}
+
+/* A tiled level that starts in local memory and runs past its 32 MB end
+   into the AGP half: the staged copy reads the local part from VRAM run
+   by run and the rest over the bus, so the local part must hold every
+   earlier draw's stores. Level L is 512 x 512 ARGB8888 at RTS_L, 1 MB,
+   texel rows 0-255 local and the rest in AGP memory. Draw A, untextured,
+   rewrites texel rows 0-31 (it renders into L's own surface). Draw B
+   samples texel (x, y - 40) into rows 40-71 of the same surface. The
+   only register written between the two draws is the texture enable,
+   so in the GPU lane A is still queued when B's state is captured. B
+   must see A's pixels: the expected bytes are L's rows 0-31 read back
+   after both draws. */
+#define RTS_L 0x01f80000u
+
+static void
+rts_agp_level(rage128_t *dev)
+{
+    static rage128_raster_state_t rs;
+    static uint8_t                pre[2048 * 72], post[2048 * 72];
+    r3d_vtx_t                     v[6];
+    uint32_t                      pitch = 2048u, bad = 0, chg = 0;
+    uint32_t                      bus = rd(dev, RAGE128_BUS_CNTL);
+    uint32_t                      agp = rd(dev, RAGE128_AGP_BASE);
+    uint8_t                       cmd = pci_rd8(0x04);
+    uint64_t                      s0 = 0, b0 = 0, s1 = 0, b1 = 0;
+    int                           gv;
+    static const float            qx[6] = { 0, 1, 0, 1, 1, 0 };
+    static const float            qy[6] = { 0, 0, 1, 0, 1, 1 };
+
+    /* the AGP half readable: mastering on, aperture at 4 MB of RAM */
+    harness_ram_alloc();
+    pci_wr8(0x04, cmd | 0x04);
+    wr(dev, RAGE128_BUS_CNTL, bus & ~RAGE128_BUS_CNTL_BUS_MASTER_DIS);
+    wr(dev, RAGE128_AGP_BASE, 0x00400000);
+
+    rts_ctx(dev, RTS_L, 512, 72, RTS_L);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000909); /* 512 x 512, one level */
+    rts_seed(dev, RTS_L, pitch * 80u, 0x4b000000u); /* tile rows 0-4, all local */
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, RTS_L, pitch, 0, pre, pitch * 72u, 0);
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 6; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xff3a6c9eu;
+    }
+    gv = harness_gpu_verify_stats(dev, &s0, &b0);
+    /* A: rows 0-32, columns 0-63, untextured */
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+    for (int k = 0; k < 6; k++) {
+        v[k].x = qx[k] * 64.0f;
+        v[k].y = qy[k] * 33.0f;
+    }
+    rage128_raster_state_capture(dev, &rs);
+    rage128_raster_submit_tri(dev, &rs, &v[0], &v[1], &v[2]);
+    rage128_raster_submit_tri(dev, &rs, &v[3], &v[4], &v[5]);
+    /* B: rows 40-71 from texel rows 0-31 */
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000010);
+    for (int k = 0; k < 6; k++) {
+        v[k].y = 40.0f + qy[k] * 32.0f;
+        v[k].s = qx[k] * 64.0f / 512.0f;
+        v[k].t = qy[k] * 32.0f / 512.0f;
+    }
+    rage128_raster_state_capture(dev, &rs);
+    rage128_raster_submit_tri(dev, &rs, &v[0], &v[1], &v[2]);
+    rage128_raster_submit_tri(dev, &rs, &v[3], &v[4], &v[5]);
+    flush_sync(dev);
+    r128_card_copy_tiled(dev, RTS_L, pitch, 0, post, pitch * 72u, 0);
+
+    for (uint32_t y = 0; y < 32; y++)
+        for (uint32_t x = 0; x < 64; x++) {
+            chg += memcmp(post + y * pitch + x * 4u, pre + y * pitch + x * 4u, 4) != 0;
+            bad += memcmp(post + (40u + y) * pitch + x * 4u, post + y * pitch + x * 4u, 4) != 0;
+        }
+    check32("gpu rtt-staged: level into AGP: setup: the first draw changed every sampled texel",
+            chg, 2048);
+    check32("gpu rtt-staged: level into AGP: the second draw samples the first one's pixels",
+            bad, 0);
+    if (gv && harness_gpu_verify_stats(dev, &s1, &b1))
+        check_true("gpu rtt-staged: level into AGP: gpu verify mismatched nothing", b1 == b0);
+    printf("gpu rtt-staged: level into AGP bytes: changed=%u wrong=%u verify segments +%llu"
+           " mismatched +%llu\n",
+           chg, bad, (unsigned long long) (s1 - s0), (unsigned long long) (b1 - b0));
+
+    flush_sync(dev);
+    wr(dev, RAGE128_AGP_BASE, agp);
+    wr(dev, RAGE128_BUS_CNTL, bus);
+    pci_wr8(0x04, cmd);
+}
+
+static void
+vectors_gpu_rtt_staged(rage128_t *dev)
+{
+    harness_gpu_alias_t al;
+    int                 stg;
+
+    /* Byte rows first: they need no probe and run in every lane. */
+    rts_bytes(dev, "own color target", RTS_C, 64, 32, RTS_C, 0);
+    rts_bytes(dev, "over-cap own color target", RTS_B, 256, 256, RTS_B, 0);
+    rts_bytes(dev, "texture over the Z rows", RTS_C, 64, 32, RTS_Z, 1);
+    rts_bytes2(dev, "two draws in sequence", RTS_C, 64, 32);
+    rts_bytes2(dev, "two over-cap draws in sequence", RTS_B, 256, 256);
+    rts_agp_level(dev);
+    rts_restore(dev);
+
+    if (!harness_gpu_available()) {
+        printf("SKIP gpu rtt-staged: admission rows (built without Vulkan headers)\n");
+        return;
+    }
+
+    /* 1: the staged level is the color target's own bytes. */
+    rts_ctx(dev, RTS_C, 64, 64, RTS_C);
+    check_true("gpu rtt-staged: probe ran",
+               rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg));
+    rts_print("own color target", &al);
+    check_true("gpu rtt-staged: setup: the tiled level is staged", stg);
+    check_true("gpu rtt-staged: tiled level under its own color target runs parallel",
+               rts_parallel(&al));
+
+    /* 1b: a two-level chain, both levels tiled and staged. */
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000616);         /* 64x64, 2 levels */
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, (6u << 16) | 0x04);   /* MIN mip         */
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(1), RTS_C | (2u << 30));
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (RTS_C + 0x2000u) | (2u << 30));
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("staged mip chain", &al);
+    check_true("gpu rtt-staged: mip chain with every level staged runs parallel",
+               rts_parallel(&al));
+
+    /* 9: the same chain with the lower level linear, read from VRAM. */
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), RTS_C + 0x2000u);
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("mip chain, lower level live", &al);
+    check_true("gpu rtt-staged: mip chain with one level read from VRAM stays serial",
+               rts_serial(&al, 1));
+
+    /* 6: the level's staging found no room. */
+    rts_ctx(dev, RTS_C, 64, 64, RTS_C);
+    rts_probe(dev, 64.0f, 32.0f, 0, &al, &stg);
+    rts_print("staging failed", &al);
+    check_true("gpu rtt-staged: a level whose staging failed stays serial",
+               rts_serial(&al, 1));
+
+    /* 5: a linear texture under its own target is read from VRAM. */
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), RTS_C);
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("linear texture", &al);
+    check_true("gpu rtt-staged: linear texture under its own target stays serial",
+               rts_serial(&al, 1));
+
+    /* 7: stage 0 staged, stage 1 linear over the same bytes. */
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), RTS_C | (2u << 30));
+    wr(dev, RAGE128_SEC_TEX_OFFSET_C(0), RTS_C);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x06060606);
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000030);               /* both stages enabled */
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("second stage live", &al);
+    check_true("gpu rtt-staged: a second stage read from VRAM keeps the draw serial",
+               rts_serial(&al, 1));
+
+    /* 8: the color target overlaps its own Z; the texture is staged. */
+    rts_ctx(dev, RTS_C, 64, 64, RTS_C);
+    wr(dev, RAGE128_Z_OFFSET_C, RTS_C + 0x1000u);
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000013);
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("color over Z", &al);
+    check_true("gpu rtt-staged: color over Z with a staged texture stays serial",
+               rts_serial(&al, 0));
+
+    /* 3: the staged level lies in the Z rows, not the color rows. */
+    rts_ctx(dev, RTS_C, 64, 64, RTS_Z);
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000013);
+    rts_probe(dev, 64.0f, 32.0f, -1, &al, &stg);
+    rts_print("texture over the Z rows", &al);
+    check_true("gpu rtt-staged: texture over the Z rows runs parallel",
+               rts_parallel(&al));
+
+    /* 2: over GPU_SERIAL_PX_CAP pixels. */
+    rts_ctx(dev, RTS_B, 256, 257, RTS_B);
+    rts_probe(dev, 256.0f, 256.0f, -1, &al, &stg);
+    rts_print("over-cap", &al);
+    check_true("gpu rtt-staged: setup: the over-cap draw prices past 16384 px",
+               al.need_px > 16384u);
+    check_true("gpu rtt-staged: over-cap staged self-sampling draw stays on the GPU",
+               rts_parallel(&al));
+    rts_restore(dev);
+}
+
 /* Shared CCE bring-up + batch body for the ring vectors, the
    same context vectors_cce_ring programs. */
 static void
@@ -26119,6 +26592,193 @@ vectors_reg_scale_906(rage128_t *dev)
     wr(dev, RAGE128_SCALE_3D_DATATYPE, 0);
 }
 
+/* 939: the scaler alpha blend in the shape the Windows 2000 display
+   driver's AlphaBlend sends it (Explorer's translucent selection
+   rectangle): the interpolator alpha at 0x1a88-0x1a90 set to (0, 0,
+   constant alpha << 16), then a 1:1 0x96 stretch of an aRGB 8888
+   surface whose texel alpha is 0, with MISC_3D_STATE 0x00540500
+   (ALPHA_BLND_SRC SRCALPHA, ALPHA_BLND_DST INVSRCALPHA, replicate) and
+   TEX_CNTL 0x00880200 (ALPHA_EN, ALPHA_LIGHT_FN copy input), onto a
+   white 8888 destination. Each channel must come out as the source
+   times a plus the destination times 1 - a, a = constant alpha / 255,
+   rounded to nearest, worked out here in double precision; the alpha
+   channel gets the same equation with the source alpha a. With
+   ALPHA_EN clear the same packet copies the texel. On code without the
+   blend the stretch copies 00316ac5 for every constant alpha, and the
+   three registers read back as 0. */
+#define S939_W   12u
+#define S939_H   5u
+#define S939_X   3u
+#define S939_Y   2u
+#define S939_SRC 0x00316ac5u
+#define S939_DST 0x00ffffffu
+
+static uint32_t
+s939_expect(uint32_t s, uint32_t d, uint32_t ca)
+{
+    double   a   = (double) ca / 255.0;
+    uint32_t out = 0;
+
+    for (int sh = 0; sh < 24; sh += 8) {
+        double v = (double) ((s >> sh) & 0xff) * a + (double) ((d >> sh) & 0xff) * (1.0 - a);
+
+        out |= (uint32_t) (v + 0.5) << sh;
+    }
+    /* alpha: As * a + Ad * (1 - a), with As = a and Ad = the destination's */
+    return out | ((uint32_t) ((double) ca * a + (double) (d >> 24) * (1.0 - a) + 0.5) << 24);
+}
+
+/* Draw the stretch into S906_DPKT (pitch S906_DPX) prefilled with
+   S939_DST; returns 1 when every pixel inside the rect is want and every
+   pixel of the window outside it is still S939_DST. */
+static int
+s939_draw(rage128_t *dev, uint32_t a90, uint32_t tex_cntl, uint32_t want)
+{
+    uint32_t pl[14], n = 0;
+    uint32_t *d = (uint32_t *) &dev->svga.vram[S906_DPKT];
+    int       ok = 1;
+
+    for (uint32_t i = 0; i < S906_DPX * 16u; i++)
+        d[i] = S939_DST;
+    for (uint32_t i = 0; i < 16u * 16u; i++)
+        ((uint32_t *) &dev->svga.vram[S906_SRC])[i] = S939_SRC;
+    wr(dev, 0x1a88, 0);
+    wr(dev, 0x1a8c, 0);
+    wr(dev, 0x1a90, a90);
+    wr(dev, RAGE128_SCALE_SCR_HEIGHT_WIDTH, (S939_H << 16) | S939_W);
+    flush_sync(dev);
+    pl[n++] = 0x00000002u | (15u << 4) | (6u << 8) | (3u << 12) | (0xccu << 16) | (2u << 24);
+    pl[n++] = ((S906_DPX / 8) << 21) | (S906_DPKT >> 5);
+    pl[n++] = 0x00540500u;
+    pl[n++] = tex_cntl;
+    pl[n++] = 0x02180840u;
+    pl[n++] = 6;
+    pl[n++] = S906_SRC;
+    pl[n++] = 16 / 8;
+    pl[n++] = 0;
+    pl[n++] = 0x00010000u;
+    pl[n++] = 0x00010000u;
+    pl[n++] = (S939_X << 16) | S939_Y;
+    pl[n++] = (S939_H << 16) | S939_W;
+    rage128_2d_packet3(dev, 0x96u << 8, pl, n);
+    flush_sync(dev);
+    for (uint32_t y = 0; y < 16u; y++)
+        for (uint32_t x = 0; x < S906_DPX; x++) {
+            int in = x >= S939_X && x < S939_X + S939_W && y >= S939_Y && y < S939_Y + S939_H;
+
+            if (d[y * S906_DPX + x] != (in ? want : S939_DST))
+                ok = 0;
+        }
+    return ok;
+}
+
+/* RGB 332 (datatype 7) blends per channel: red 0xe0 (red 7, green 0,
+   blue 0) over black at constant alpha 0x80. Each channel is widened by
+   repeating its top bits, blended, rounded, and truncated back to its
+   bits; green and blue must stay 0. On code that blends the byte as a
+   gray value the result is 0x70, which carries green. */
+static uint32_t
+s939_332_expect(uint32_t s, uint32_t d, uint32_t ca)
+{
+    static const int sh[3] = { 5, 2, 0 }, bits[3] = { 3, 3, 2 };
+    double   a   = (double) ca / 255.0;
+    uint32_t out = 0;
+
+    for (int c = 0; c < 3; c++) {
+        uint32_t m  = (1u << bits[c]) - 1;
+        uint32_t sv = (s >> sh[c]) & m, dv = (d >> sh[c]) & m;
+        /* widen to 8 bits by repeating the top bits */
+        uint32_t s8 = (bits[c] == 3) ? ((sv << 5) | (sv << 2) | (sv >> 1)) : sv * 0x55u;
+        uint32_t d8 = (bits[c] == 3) ? ((dv << 5) | (dv << 2) | (dv >> 1)) : dv * 0x55u;
+        uint32_t v  = (uint32_t) ((double) s8 * a + (double) d8 * (1.0 - a) + 0.5);
+
+        out |= (v >> (8 - bits[c])) << sh[c];
+    }
+    return out;
+}
+
+static void
+s939_rgb332(rage128_t *dev)
+{
+    uint32_t pl[14], n = 0;
+    uint8_t *d    = &dev->svga.vram[S906_DPKT];
+    uint32_t want = s939_332_expect(0xe0, 0x00, 0x80);
+    int      ok   = 1;
+    char     row[160];
+
+    memset(d, 0, S906_DPX * 16u);
+    memset(&dev->svga.vram[S906_SRC], 0xe0, 16u * 16u);
+    wr(dev, 0x1a88, 0);
+    wr(dev, 0x1a8c, 0);
+    wr(dev, 0x1a90, 0x80u << 16);
+    wr(dev, RAGE128_SCALE_SCR_HEIGHT_WIDTH, (S939_H << 16) | S939_W);
+    flush_sync(dev);
+    pl[n++] = 0x00000002u | (15u << 4) | (7u << 8) | (3u << 12) | (0xccu << 16) | (2u << 24);
+    pl[n++] = ((S906_DPX / 8) << 21) | (S906_DPKT >> 5);
+    pl[n++] = 0x00540500u;
+    pl[n++] = 0x00880200u;
+    pl[n++] = 0x02180840u;
+    pl[n++] = 7;
+    pl[n++] = S906_SRC;
+    pl[n++] = 16 / 8;
+    pl[n++] = 0;
+    pl[n++] = 0x00010000u;
+    pl[n++] = 0x00010000u;
+    pl[n++] = (S939_X << 16) | S939_Y;
+    pl[n++] = (S939_H << 16) | S939_W;
+    rage128_2d_packet3(dev, 0x96u << 8, pl, n);
+    flush_sync(dev);
+    for (uint32_t y = 0; y < 16u; y++)
+        for (uint32_t x = 0; x < S906_DPX; x++) {
+            int in = x >= S939_X && x < S939_X + S939_W && y >= S939_Y && y < S939_Y + S939_H;
+
+            if (d[y * S906_DPX + x] != (in ? want : 0u))
+                ok = 0;
+        }
+    snprintf(row, sizeof(row),
+             "2d 939: RGB 332 blends per channel: red e0 over black at alpha 80 is %02x, green 0", want);
+    check_true(row, ok && !(want & 0x1c));
+}
+
+static void
+vectors_scale_alpha_939(rage128_t *dev)
+{
+    static const uint32_t cas[] = { 0x46, 0x00, 0xff, 0x85 };
+    char                  row[160];
+
+    flush_sync(dev);
+    wr(dev, RAGE128_DP_WRITE_MASK, 0xffffffff);
+    wr(dev, RAGE128_DEFAULT_SC_BOTTOM_RIGHT, 0x1fff1fff);
+    wr(dev, RAGE128_SC_TOP_LEFT, 0);
+    wr(dev, RAGE128_SC_BOTTOM_RIGHT, 0x1fff1fff);
+    wr(dev, RAGE128_CLR_CMP_CNTL, 0);
+    wr(dev, RAGE128_AUX_SC_CNTL, 0);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000040);
+
+    wr(dev, 0x1a88, 0x00012345);
+    wr(dev, 0x1a8c, 0xfffe0000);
+    wr(dev, 0x1a90, 0x00460000);
+    check_true("2d 939: 0x1a88 / 0x1a8c / 0x1a90 read back as written",
+               rd(dev, 0x1a88) == 0x00012345 && rd(dev, 0x1a8c) == 0xfffe0000
+                   && rd(dev, 0x1a90) == 0x00460000);
+    for (size_t i = 0; i < sizeof(cas) / sizeof(cas[0]); i++) {
+        uint32_t want = s939_expect(S939_SRC, S939_DST, cas[i]);
+
+        snprintf(row, sizeof(row),
+                 "2d 939: AlphaBlend stretch, constant alpha %02x: 316ac5 over white is %08x",
+                 cas[i], want);
+        check_true(row, s939_draw(dev, cas[i] << 16, 0x00880200u, want));
+    }
+    check_true("2d 939: control: ALPHA_EN clear copies the texel",
+               s939_draw(dev, 0x46u << 16, 0x00880000u, S939_SRC));
+    /* The start field is 8.16 in [23:0]: a set top byte must not
+       saturate the alpha, so 0xff460000 blends as 0x46 does. */
+    check_true("2d 939: interpolator alpha start ignores bits 31:24 (0xff460000 blends as 0x46)",
+               s939_draw(dev, 0xff460000u, 0x00880200u, s939_expect(S939_SRC, S939_DST, 0x46)));
+    s939_rgb332(dev);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000000);
+}
+
 /* 921: the stretch walk's row loop for the common case (no compare, no
    aux scissor, open write mask, ROP3 0xCC, source and destination both
    565 or both 8888) against the per-pixel walk. The same stretch is
@@ -28599,6 +29259,7 @@ run_gpu2d_verify(void)
     vectors_reg_scale_906(dev);
     vectors_stretch_rows_921(dev);
     vectors_stretch_rows_930(dev);
+    vectors_scale_alpha_939(dev);
     vectors_fill_rows_929(dev);
     vectors_eng_time_918(dev);
     vectors_cce_status_follows_work(dev);
@@ -28799,6 +29460,66 @@ run_gpu_carry(void)
     vectors_gpu_carry(dev);
     close_dev(dev);
     setenv("R128_GPU", gprev, 1);
+}
+
+/* The stage read barrier in the two debug modes that leave the async
+   GPU lane's fence path: the 2D differential oracle (R128_GPU_2D=verify)
+   and synchronization telemetry (R128_GPU_SYNC_TELEMETRY). With async
+   on, a flush there only submits the pending segment, so the barrier
+   must also wait for it before the second draw's staged copy reads its
+   texture. Each mode gets its own device with the backend on and async,
+   and runs the two-draws-in-sequence byte rows of the render-to-texture
+   group: the second draw has to sample the first one's pixels. */
+static void
+run_gpu_stage_modes(void)
+{
+    const char *genv = getenv("R128_GPU");
+    char        gprev[32] = "";
+
+    if (!harness_gpu_available()) {
+        printf("SKIP gpu stage modes: built without Vulkan headers\n");
+        return;
+    }
+    if (genv)
+        snprintf(gprev, sizeof(gprev), "%s", genv);
+    for (int mode = 0; mode < 2; mode++) {
+        const char *key = mode ? "R128_GPU_SYNC_TELEMETRY" : "R128_GPU_2D";
+        const char *env = getenv(key);
+        char        prev[256] = "", what[160];
+        rage128_t  *dev;
+        int         armed;
+
+        if (env)
+            snprintf(prev, sizeof(prev), "%s", env);
+        harness_cfg_memory_mb = 32;
+        setenv("R128_GPU", "1", 1);
+        /* the telemetry path names a CSV; the bit bucket keeps the run
+           clean. The 2D oracle is read at the backend's deferred init,
+           inside the first accelerated register write, so it stays set
+           through the rows. */
+        setenv(key, mode ? "/dev/null" : "verify", 1);
+        dev = rage128_init(&ati_rage128_pro_device);
+        rts_ctx(dev, RTS_C, 64, 33, RTS_C); /* fires the deferred init */
+        /* R128_JIT=verify keeps the backend off, as for the carry rows */
+        if (!dev->gpu || !harness_gpu_async(dev->gpu))
+            printf("SKIP gpu stage modes: no async GPU backend on this device\n");
+        else {
+            armed = mode ? dev->synctel != NULL : rage128_gpu_2d_verifying(dev);
+            snprintf(what, sizeof(what), "gpu stage modes: %s: mode armed",
+                     mode ? "sync telemetry" : "2d verify");
+            check_true(what, armed);
+            rts_bytes2(dev, mode ? "sync telemetry, two draws in sequence"
+                                 : "2d verify, two draws in sequence",
+                       RTS_C, 64, 32);
+            rts_bytes2(dev, mode ? "sync telemetry, two over-cap draws in sequence"
+                                 : "2d verify, two over-cap draws in sequence",
+                       RTS_B, 256, 256);
+            rts_restore(dev);
+        }
+        close_dev(dev);
+        setenv(key, prev, 1);
+        setenv("R128_GPU", gprev, 1);
+    }
 }
 
 
@@ -29386,6 +30107,7 @@ run_lanegap(void)
     vectors_ov0_end_inclusive(dev);
     vectors_lanegap_jit_dst_dt(dev);
     vectors_lanegap_gpu_pricing(dev);
+    vectors_gpu_rtt_staged(dev);
     vectors_lanegap_texkey(dev);
     vectors_lanegap_vga_barrier(dev);
     vectors_lanegap_2d_telemetry(dev);
@@ -31257,6 +31979,1317 @@ vectors_gpu_tuple_reload(void)
 /* A unit retains each device's vector order and lifetime. The serial and
    threaded AGP runners share a captured pixel oracle and therefore select
    together, even though other device runners occur between them. */
+/* ------------------------------------------------------------------ */
+/* Texture levels kept across the draws of a batch (the serial CPU     */
+/* raster lanes: one render thread, no GPU backend). A tiled level in  */
+/* local memory is detiled into the staging arena once and serves the  */
+/* later draws of the batch. The rows check that the copy is reused,   */
+/* and that it ends at every event that can change its source bytes: a */
+/* raster flush, a store through the linear aperture, MM_DATA or a VGA */
+/* window, a 3D draw into the bytes, a 2D operation, and an arena      */
+/* wrap. A level in AGP memory is staged for every draw.               */
+/* ------------------------------------------------------------------ */
+#define TK_TEX   TL_TEX       /* 64x64 ARGB8888, tiled, 256 B rows      */
+#define TK_WRAP  0x00500000u  /* 80 more such levels, 16 KB apart       */
+#define TK_NWRAP 80u
+#define TK_B     (TK_TEX + 0x4000u) /* a second level, in TK_TEX's 64 KB piece */
+#define TK_TEXEL(u, v) (0xff000000u | ((uint32_t) (v) << 8) | (uint32_t) (u))
+#define TK_PIX(x, y)   (*(uint32_t *) &dev->svga.vram[HZ_A + ((y) * 64 + (x)) * 4])
+
+/* A register write as the command stream makes it: no drain before it,
+   and none of the page marks wr() adds, so the device's own bookkeeping
+   is all that tells the capture about the event under test. */
+static void
+tk_wr(rage128_t *dev, uint32_t off, uint32_t val)
+{
+    int old = rage128_on_cce_thread;
+
+    rage128_on_cce_thread = 1;
+    rage128_reg_write(dev, off, val, 0xffffffffu);
+    rage128_on_cce_thread = old;
+}
+
+/* The lower-left triangle of the 64x64 target, texel (x, y) on pixel
+   (x, y); or both triangles, to cover the whole target. */
+static void
+tk_draw(rage128_t *dev, rage128_raster_state_t *rs, uint32_t argb, int whole)
+{
+    r3d_vtx_t v[4];
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 4; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = argb;
+    }
+    v[0].x = 0.0f;  v[0].y = 0.0f;  v[0].s = 0.0f; v[0].t = 0.0f;
+    v[1].x = 64.0f; v[1].y = 0.0f;  v[1].s = 1.0f; v[1].t = 0.0f;
+    v[2].x = 0.0f;  v[2].y = 64.0f; v[2].s = 0.0f; v[2].t = 1.0f;
+    v[3].x = 64.0f; v[3].y = 64.0f; v[3].s = 1.0f; v[3].t = 1.0f;
+    rage128_raster_state_capture(dev, rs);
+    rage128_raster_submit_tri(dev, rs, &v[0], &v[1], &v[2]);
+    if (whole)
+        rage128_raster_submit_tri(dev, rs, &v[1], &v[3], &v[2]);
+}
+
+static void
+tk_seed(rage128_t *dev, uint32_t base, uint32_t tag)
+{
+    for (uint32_t vv = 0; vv < 64; vv++)
+        for (uint32_t uu = 0; uu < 64; uu++)
+            *(uint32_t *) &dev->svga.vram[base + tl_off(uu * 4, vv, 256)]
+                = TK_TEXEL(uu, vv) | (tag << 16);
+}
+
+static void
+tk_target(rage128_t *dev)
+{
+    for (uint32_t i = 0; i < 16384; i += 4)
+        *(uint32_t *) &dev->svga.vram[HZ_A + i] = HZ_MARK;
+}
+
+/* The rows draw from the harness thread. On the device a batch is drawn
+   by the executor, or by the CPU thread while it holds the executor off,
+   so the executor cannot run out of work, and flush, in the middle of
+   one. Here a pass the executor makes after a leg's register writes can
+   reach its out-of-work flush while the leg is drawing. The legs hold
+   this mutex while they draw, and the executor's out-of-work hook waits
+   for it, which stops a pass before that flush. The hook returns before
+   the flush runs, so a pass that got through the hook ahead of the leg
+   may still have its flush to make: tk_hold, which starts a leg, takes
+   the mutex and then looks at cce_executing. The executor sets that flag
+   at the top of each pass, ahead of the hook, and clears it on this
+   path only after the flush has returned. So with the mutex held and
+   the flag clear, every pass is either over, flush included, or has not
+   reached the hook and will wait in it until tk_end. A set flag means a
+   pass is in the hook or between the hook and the end of its flush:
+   tk_hold lets go of the mutex, yields and looks again. Nothing that
+   drains the engine may run while the mutex is held. */
+static pthread_mutex_t tk_mtx = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t        tk_hold_retries;
+
+static void
+tk_idle_hook(rage128_t *dev)
+{
+    (void) dev;
+    pthread_mutex_lock(&tk_mtx);
+    pthread_mutex_unlock(&tk_mtx);
+}
+
+static void
+tk_hold(rage128_t *dev)
+{
+    for (;;) {
+        pthread_mutex_lock(&tk_mtx);
+        if (!atomic_load(&dev->cce_executing))
+            return;
+        pthread_mutex_unlock(&tk_mtx);
+        tk_hold_retries++;
+        sched_yield();
+    }
+}
+
+static void
+tk_end(void)
+{
+    pthread_mutex_unlock(&tk_mtx);
+}
+
+/* R9's store: made from inside a capture, by the bus read of a level
+   in AGP memory, so that it lands after the capture has looked for
+   stores and before the capture copies the level staged next. Returns 0:
+   the read is then served from harness RAM as usual. */
+static rage128_t *tk_bm_dev;
+static int        tk_bm_armed;
+static uint32_t   tk_bm_reads;
+
+static int
+tk_bm_hook(uint32_t addr, uint8_t *dst, uint32_t len)
+{
+    (void) addr;
+    (void) dst;
+    (void) len;
+    tk_bm_reads++;
+    if (tk_bm_armed) {
+        tk_bm_armed = 0;
+        rage128_lfb_writel(tk_bm_dev->lfb_base + TK_TEX + tl_off(5 * 4, 9, 256), 0xff0f1e2du,
+                           tk_bm_dev);
+    }
+    return 0;
+}
+
+/* Start a leg: a new batch, the texture seeded, the 3D state set for a
+   1:1 textured copy onto the 64x64 target at HZ_A; returns with the
+   executor held off (tk_end ends the leg). */
+static void
+tk_begin(rage128_t *dev)
+{
+    tk_seed(dev, TK_TEX, 0);
+    tk_target(dev);
+    wr(dev, 0x16e8, 0x1fff1fff);
+    wr(dev, 0x16ec, 0x00000000);
+    wr(dev, 0x16f0, 0x003f003f);
+    wr(dev, 0x16c0, 0x00000003);
+    wr(dev, 0x16cc, 0xffffffff);
+    wr(dev, 0x1660, 0x00000000);
+    wr(dev, 0x16c4, 0x00000006);
+    wr(dev, RAGE128_MISC_3D_STATE_CNTL, 0x00000000);
+    wr(dev, RAGE128_PLANE_3D_MASK_C, 0xffffffff);
+    wr(dev, RAGE128_SETUP_CNTL, 0x00000020);
+    wr(dev, RAGE128_WINDOW_XY_OFFSET, 0x00000000);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000000);
+    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, 6u << 16);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_TEX | (2u << 30));
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00184041u);
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000010);
+    tk_hold(dev);
+    flush_sync(dev);
+}
+
+static void
+vectors_tex_keep(rage128_t *dev)
+{
+    static rage128_raster_state_t rs, rs2;
+    struct rage128_tex_stage     *ts = &dev->tex_stage;
+    uint32_t                      off1, lin59 = (9u * 64u + 5u) * 4u;
+    uint32_t                     *tbl;
+    uint32_t                      bad;
+    uint64_t                      wrap0;
+    uint32_t                      gen_save;
+
+    check32("tex keep: setup: one render thread", (uint32_t) rage128_raster_nthreads(dev), 1);
+    check_true("tex keep: setup: no GPU backend", dev->gpu == NULL);
+    atomic_store(&rage128_harness_idle_hook, tk_idle_hook);
+
+    /* R1: the second draw of a batch copies no level. The witness is a
+       texel changed in the staged copy itself, which only a draw that
+       reuses that copy can show. */
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    off1 = rs.prim_stage_off[0];
+    check_true("tex keep: R1: the level is staged", off1 != R128_TEX_STAGE_NONE);
+    check32("tex keep: R1: first draw samples the texture", TK_PIX(5, 9), TK_TEXEL(5, 9));
+    if (off1 != R128_TEX_STAGE_NONE)
+        *(uint32_t *) &ts->arena[off1 + lin59] = 0xff5a5a5au;
+    tk_target(dev);
+    tk_draw(dev, &rs2, 0xffffffff, 0);
+    check_true("tex keep: R1: second draw of the batch reuses the staged level",
+               rs2.prim_stage_off[0] == off1 && off1 != R128_TEX_STAGE_NONE
+                   && *(uint32_t *) &ts->arena[off1 + lin59] == 0xff5a5a5au);
+    check32("tex keep: R1: second draw samples the kept copy", TK_PIX(5, 9), 0xff5a5a5au);
+    /* a store outside the kept source leaves the copy in use */
+    rage128_lfb_writel(dev->lfb_base + HZ_Z, 0x01020304u, dev);
+    tk_target(dev);
+    tk_draw(dev, &rs2, 0xffffffff, 0);
+    check32("tex keep: R1: a store elsewhere keeps the copy", TK_PIX(5, 9), 0xff5a5a5au);
+    /* A raster flush ends the batch and the copy with it. The flush is
+       called alone: flush_sync would first report a store at an unknown
+       address, which ends the copy by itself. The store elsewhere above
+       was consumed by the draw that followed it, so nothing but the
+       flush stands between that draw and the next. */
+    rage128_raster_flush(dev);
+    tk_target(dev);
+    tk_draw(dev, &rs2, 0xffffffff, 0);
+    check32("tex keep: R1: a flush ends the kept copy", TK_PIX(5, 9), TK_TEXEL(5, 9));
+    tk_end();
+
+    /* R2: a store through the linear aperture into the texture. */
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    rage128_lfb_writel(dev->lfb_base + TK_TEX + tl_off(5 * 4, 9, 256), 0xff123456u, dev);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R2: aperture store shows on the next draw", TK_PIX(5, 9), 0xff123456u);
+    check32("tex keep: R2: the other texels stay", TK_PIX(6, 9), TK_TEXEL(6, 9));
+    rage128_lfb_writeb(dev->lfb_base + TK_TEX + tl_off(7 * 4, 3, 256), 0x77, dev);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R2: byte store shows on the next draw", TK_PIX(7, 3),
+            (TK_TEXEL(7, 3) & 0xffffff00u) | 0x77u);
+    tk_end();
+
+    /* R3: the same through MM_INDEX (MM_APER) and MM_DATA, and through
+       the banked VGA window. */
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    rage128_reg_write(dev, RAGE128_MM_INDEX,
+                      RAGE128_MM_INDEX_MM_APER | (TK_TEX + tl_off(5 * 4, 9, 256)), 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_MM_DATA, 0xff654321u, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_MM_INDEX, 0, 0xffffffffu);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R3: MM_DATA store shows on the next draw", TK_PIX(5, 9), 0xff654321u);
+    tk_end();
+
+    gen_save = rd(dev, RAGE128_CRTC_GEN_CNTL);
+    wr(dev, RAGE128_CRTC_GEN_CNTL, gen_save | RAGE128_CRTC_EXT_DISP_EN);
+    wr(dev, RAGE128_MEM_VGA_WP_SEL, TK_TEX / RAGE128_VGA_PAGE_SIZE);
+    wr(dev, RAGE128_MEM_VGA_RP_SEL, TK_TEX / RAGE128_VGA_PAGE_SIZE);
+    dev->svga.gdcreg[6] &= ~0x0c;
+    rage128_update_banking(dev);
+    rage128_updatemapping(dev);
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    /* byte 64 of the tiled image is byte 0 of texel (0, 1) */
+    dev->svga.mapping.write_b(0xa0000 + 64u, 0x5a, dev->svga.mapping.priv);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R3: control: the window store reached the texture",
+            dev->svga.vram[TK_TEX + 64], 0x5a);
+    check32("tex keep: R3: VGA window store shows on the next draw", TK_PIX(0, 1),
+            (TK_TEXEL(0, 1) & 0xffffff00u) | 0x5au);
+    tk_end();
+    wr(dev, RAGE128_CRTC_GEN_CNTL, gen_save);
+
+    /* R4: a draw whose color target is the texture's bytes; it samples
+       a second texture of one solid color. */
+    for (uint32_t i = 0; i < 16384; i += 4)
+        *(uint32_t *) &dev->svga.vram[TK_WRAP + i] = 0xff445566u;
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_WRAP | (2u << 30));
+    tk_wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (TK_TEX >> 5));
+    tk_draw(dev, &rs2, 0xffffffff, 1);
+    tk_wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_TEX | (2u << 30));
+    check32("tex keep: R4: control: the draw rendered over the texture",
+            *(uint32_t *) &dev->svga.vram[TK_TEX + lin59], 0xff445566u);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R4: rendered texels show on the next draw", TK_PIX(5, 9), 0xff445566u);
+    tk_end();
+
+    /* R8: a draw that samples the texture and renders into its bytes.
+       It reads the copy staged at its capture; the draw after it must
+       see what it rendered. Pixel (21, 0) of the linear target is byte
+       84, which is texel (5, 1) of the tiled image. */
+    tk_begin(dev);
+    tk_wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (TK_TEX >> 5));
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    check32("tex keep: R8: control: the draw rendered texel (21,0) over byte 84",
+            *(uint32_t *) &dev->svga.vram[TK_TEX + 84], TK_TEXEL(21, 0));
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R8: the draw after a self-render sees the result", TK_PIX(5, 1),
+            TK_TEXEL(21, 0));
+    tk_end();
+
+    /* R5: a 2D fill, started by its register write, into the texture.
+       Pixel (5, 0) of the fill's linear target is texel (5, 0). */
+    tk_begin(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    tk_end(); /* the register writes below drain the engine */
+    rage128_reg_write(dev, RAGE128_DP_GUI_MASTER_CNTL,
+                      0x00000003u | (13u << 4) | (6u << 8) | (0xf0u << 16)
+                          | (1u << 28) | (1u << 29) | (1u << 30), 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DP_BRUSH_FRGD_CLR, 0xffc0ffeeu, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_OFFSET, TK_TEX, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_PITCH, 8, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_X, 5, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_Y, 0, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_WIDTH_HEIGHT, (1u << 16) | 1u, 0xffffffffu);
+    rage128_reg_write(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5),
+                      0xffffffffu);
+    rage128_reg_write(dev, 0x16c4, 0x00000006, 0xffffffffu);
+    rage128_reg_write(dev, 0x16c0, 0x00000003, 0xffffffffu);
+    rage128_reg_write(dev, 0x16f0, 0x003f003f, 0xffffffffu);
+    rage128_pm4_drain_wait(dev);
+    tk_hold(dev);
+    check32("tex keep: R5: control: the fill landed in the texture",
+            *(uint32_t *) &dev->svga.vram[TK_TEX + 20], 0xffc0ffeeu);
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R5: 2D fill shows on the next draw", TK_PIX(5, 0), 0xffc0ffeeu);
+    tk_end();
+
+    /* R7: more distinct levels in one batch than the arena holds. Two
+       passes over 80 levels of 16 KB; every draw must sample its own
+       level, across the wraps and from the copies kept in between. */
+    for (uint32_t k = 0; k < TK_NWRAP; k++)
+        tk_seed(dev, TK_WRAP + k * 0x4000u, k + 1u);
+    tk_begin(dev);
+    wrap0 = ts->n_rec_wrap;
+    bad   = 0;
+    for (uint32_t pass = 0; pass < 2; pass++)
+        for (uint32_t k = 0; k < TK_NWRAP; k++) {
+            tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), (TK_WRAP + k * 0x4000u) | (2u << 30));
+            tk_target(dev);
+            tk_draw(dev, &rs, 0xffffffff, 0);
+            if (TK_PIX(5, 9) != (TK_TEXEL(5, 9) | ((k + 1u) << 16))
+                || TK_PIX(37, 2) != (TK_TEXEL(37, 2) | ((k + 1u) << 16)))
+                bad++;
+        }
+    printf("tex keep: R7 data: arena cap=%u wraps=%llu wrong draws=%u of %u\n", ts->cap,
+           (unsigned long long) (ts->n_rec_wrap - wrap0), bad, 2u * TK_NWRAP);
+    check32("tex keep: R7: every draw samples its own level across arena wraps", bad, 0);
+    tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_TEX | (2u << 30));
+    tk_end();
+
+    /* R6: a level in AGP memory is staged for every draw: the guest
+       writes that memory without the device seeing the store. */
+    flush_sync(dev);
+    harness_ram_alloc();
+    tbl = (uint32_t *) (ram + GART_TABLE_PHYS);
+    memset(ram + GART_TABLE_PHYS, 0, 0x2000);
+    for (uint32_t p = 0; p < 4; p++)
+        tbl[p] = TAT_PHYS + p * 0x1000u;
+    pci_wr8(0x04, 0x07);
+    wr(dev, RAGE128_BUS_CNTL, rd(dev, RAGE128_BUS_CNTL) & ~RAGE128_BUS_CNTL_BUS_MASTER_DIS);
+    gart_table_on(dev, GART_TABLE_PHYS);
+    wr(dev, RAGE128_AGP_BASE, 0);
+    for (uint32_t vv = 0; vv < 64; vv++)
+        for (uint32_t uu = 0; uu < 64; uu++)
+            *(uint32_t *) (ram + TAT_PHYS + tl_off(uu * 4, vv, 256)) = TK_TEXEL(uu, vv) | 0xa00000u;
+    tk_begin(dev);
+    tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0x02000000u | (2u << 30));
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R6: control: the AGP level is sampled", TK_PIX(5, 9),
+            TK_TEXEL(5, 9) | 0xa00000u);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    *(uint32_t *) (ram + TAT_PHYS + tl_off(5 * 4, 9, 256)) = 0xff0badedu;
+    tk_target(dev);
+    tk_draw(dev, &rs, 0xffffffff, 0);
+    check32("tex keep: R6: a change in AGP memory shows on the next draw", TK_PIX(5, 9),
+            0xff0badedu);
+    tk_end();
+
+    /* R9: two levels whose sources share one 64 KB piece of local
+       memory. Level A is kept. A store lands in A while a later capture
+       is under way: after that capture has looked for stores, and before
+       it copies B, a level in the same piece that it has not staged
+       before. That draw has two mip levels: the small one lies in AGP
+       memory, reached through AGP_BASE, and is staged first, and its bus
+       read makes the store; the large one is B. The draw after it samples A again and must see the
+       store. The first leg runs the same draws without the store and
+       shows that A is otherwise reused, so the second leg's result is
+       due to the store alone. A changed texel in the staged copy is the
+       witness of reuse, as in R1. */
+    tk_seed(dev, TK_B, 0x33);
+    tk_bm_dev = dev;
+    wr(dev, RAGE128_AGP_BASE, 0x00400000); /* card 0x02200000 = bus TAT_PHYS */
+    for (int leg = 0; leg < 2; leg++) {
+        tk_begin(dev);
+        tk_draw(dev, &rs, 0xffffffff, 0);
+        off1 = rs.prim_stage_off[0];
+        if (off1 != R128_TEX_STAGE_NONE)
+            *(uint32_t *) &ts->arena[off1 + lin59] = 0xff5a5a5au;
+        tk_wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000616);
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0x02000000u | (TAT_PHYS - 0x00400000u));
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(1), TK_B | (2u << 30));
+        tk_bm_armed = leg;
+        tk_bm_reads = 0;
+        harness_bm_read_hook = tk_bm_hook;
+        tk_target(dev);
+        tk_draw(dev, &rs2, 0xffffffff, 0);
+        harness_bm_read_hook = NULL;
+        check_true(leg ? "tex keep: R9: control: the AGP level's bus read made the store"
+                       : "tex keep: R9: control: the AGP level is read from the bus",
+                   tk_bm_reads != 0 && !tk_bm_armed
+                       && *(uint32_t *) &dev->svga.vram[TK_TEX + tl_off(5 * 4, 9, 256)]
+                              == (leg ? 0xff0f1e2du : TK_TEXEL(5, 9)));
+        check_true(leg ? "tex keep: R9: control: B is staged by the draw of the store"
+                       : "tex keep: R9: control: B is staged in A's 64 KB piece",
+                   rs2.prim_stage_off[1] != R128_TEX_STAGE_NONE
+                       && rs2.prim_stage_off[1] != off1
+                       && (TK_B >> 16) == (TK_TEX >> 16));
+        check32(leg ? "tex keep: R9: control: the draw of the store samples B"
+                    : "tex keep: R9: control: the two-level draw samples B",
+                TK_PIX(5, 9), TK_TEXEL(5, 9) | (0x33u << 16));
+        tk_wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_TEX | (2u << 30));
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(1), 0);
+        tk_target(dev);
+        tk_draw(dev, &rs, 0xffffffff, 0);
+        if (leg)
+            check32("tex keep: R9: a store into A during the capture that stages B shows on the "
+                    "next draw",
+                    TK_PIX(5, 9), 0xff0f1e2du);
+        else
+            check32("tex keep: R9: control: with no store A's copy serves the draw after B",
+                    TK_PIX(5, 9), 0xff5a5a5au);
+        tk_end();
+    }
+    wr(dev, RAGE128_AGP_BASE, 0);
+    atomic_store(&rage128_harness_idle_hook, NULL);
+    printf("tex keep: hold data: legs waited %llu times for an executor pass to end\n",
+           (unsigned long long) tk_hold_retries);
+
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+    flush_sync(dev);
+}
+
+/* The rows above on their own device, in the serial CPU lane whatever
+   lane the run asks for: the GPU backend is held off while the device
+   initializes. */
+static void
+run_tex_keep(void)
+{
+    rage128_t  *dev;
+    const char *genv = getenv("R128_GPU");
+    char        gprev[32] = "";
+
+    if (genv)
+        snprintf(gprev, sizeof(gprev), "%s", genv);
+    setenv("R128_GPU", "0", 1);
+    harness_cfg_memory_mb      = 32;
+    harness_cfg_render_threads = 1;
+    dev = rage128_init(&ati_rage128_pro_device);
+    if (genv)
+        setenv("R128_GPU", gprev, 1);
+    else
+        unsetenv("R128_GPU");
+    vectors_tex_keep(dev);
+    close_dev(dev);
+}
+
+/* ------------------------------------------------------------------ */
+/* Unit tex-batch: a draw issued after new texels reach its texture's  */
+/* source samples them, in every lane, with no drain or flush between  */
+/* the draws. Three draws are captured and submitted directly; between */
+/* the first two the test changes the source the way a guest can: a    */
+/* store through the linear aperture or MM_DATA into a level in local  */
+/* memory, a guest RAM store behind a level in AGP memory, rewritten   */
+/* GART entries, a store through the card's AGP image, or AGP_BASE     */
+/* cleared. The parallel CPU lane keeps a staged level for the batch,  */
+/* so there the rows also require the draw queued before the store to  */
+/* keep the copy it was captured with, and a third draw with no store  */
+/* before it to reuse the second draw's copy without another one.      */
+/* The executor is held off while a leg draws (tk_hold).               */
+/* ------------------------------------------------------------------ */
+#define TB_OLD      0xff102030u
+#define TB_NEW      0xffa0b0c0u
+#define TB_AGP      0x02000000u /* card address of the AGP level       */
+#define TB_PHYS_OLD 0x00600000u /* PCI GART: pages of the old image    */
+#define TB_PHYS_NEW 0x00680000u /* PCI GART: pages of the new image    */
+#define TB_APER     0x00400000u /* chipset aperture base               */
+#define TB_TEXEL    ((16u * 64u + 16u) * 4u) /* s = t = 0.25 of 64x64   */
+
+enum { TB_LFB, TB_MMDATA, TB_AGP_RAM, TB_GART_PTE, TB_AGP_IMAGE, TB_AGP_BASE };
+
+static rage128_raster_state_t tb_rs;
+
+static uint32_t
+tb_draw(rage128_t *dev, float y0, float y1)
+{
+    r3d_vtx_t v[3];
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 3; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xffffffffu;
+        v[k].s       = 0.25f;
+        v[k].t       = 0.25f;
+    }
+    v[0].x = 0.0f;  v[0].y = y0;
+    v[1].x = 64.0f; v[1].y = y0;
+    v[2].x = 0.0f;  v[2].y = y1;
+    rage128_raster_state_capture(dev, &tb_rs);
+    rage128_raster_submit_tri(dev, &tb_rs, &v[0], &v[1], &v[2]);
+    return tb_rs.prim_stage_off[0];
+}
+
+static void
+tb_leg(rage128_t *dev, const char *name, uint32_t raw, int kind, uint32_t tex_cntl)
+{
+    struct rage128_tex_stage *ts  = &dev->tex_stage;
+    uint32_t                 *tbl = (uint32_t *) (ram + GART_TABLE_PHYS);
+    mem_mapping_t            *am  = &dev->agp_mapping;
+    uint32_t                  vm  = raw & 0x03ffffffu;
+    uint32_t                  off1, off2, off3, used2, used3, p1, p2, p3, reads3;
+    uint32_t                  want = kind == TB_AGP_BASE ? 0xffffffffu : TB_NEW;
+    int                       par  = !dev->gpu && rage128_raster_nthreads(dev) > 1;
+    int                       pend2;
+    char                      nm[200];
+
+    flush_sync(dev);
+
+    /* Old image everywhere the level can be read from, new image in the
+       pages a remap leg switches to. */
+    for (uint32_t i = 0; i < 16384; i += 4) {
+        *(uint32_t *) &dev->svga.vram[HZ_A + i] = HZ_MARK;
+        rage128_lfb_writel(dev->lfb_base + TL_TEX + i, TB_OLD, dev);
+        *(uint32_t *) (ram + TB_PHYS_OLD + i) = TB_OLD;
+        *(uint32_t *) (ram + TB_PHYS_NEW + i) = TB_NEW;
+        *(uint32_t *) (ram + TB_APER + i)     = TB_OLD;
+    }
+    memset(ram + GART_TABLE_PHYS, 0, 0x2000);
+    for (uint32_t p = 0; p < 4; p++)
+        tbl[p] = TB_PHYS_OLD + p * 0x1000u;
+
+    pci_wr8(0x04, 0x07);
+    wr(dev, RAGE128_BUS_CNTL, rd(dev, RAGE128_BUS_CNTL) & ~RAGE128_BUS_CNTL_BUS_MASTER_DIS);
+    if (kind == TB_AGP_IMAGE || kind == TB_AGP_BASE) {
+        /* chipset aperture: force bits clear, on-chip table off */
+        wr(dev, RAGE128_BM_CHUNK_0_VAL, 0);
+        wr(dev, RAGE128_PCI_GART_PAGE, 1);
+        wr(dev, RAGE128_AGP_BASE, TB_APER);
+    } else {
+        gart_table_on(dev, GART_TABLE_PHYS);
+        wr(dev, RAGE128_AGP_BASE, 0);
+    }
+
+    wr(dev, 0x16e8, 0x1fff1fff);
+    wr(dev, 0x16ec, 0x00000000);
+    wr(dev, 0x16f0, 0x003f003f);
+    wr(dev, 0x16c0, 0x00000003);
+    wr(dev, 0x16cc, 0xffffffff);
+    wr(dev, 0x1660, 0x00000000);
+    wr(dev, 0x16c4, 0x00000006);
+    wr(dev, RAGE128_PM4_VC_FPU_SETUP,
+       RAGE128_FPU_BACKFACE_SOLID | RAGE128_FPU_FRONTFACE_SOLID | RAGE128_FPU_COLOR_GOURAUD);
+    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    wr(dev, RAGE128_MISC_3D_STATE_CNTL, 0x00000000);
+    wr(dev, RAGE128_PLANE_3D_MASK_C, 0xffffffff);
+    wr(dev, RAGE128_SETUP_CNTL, 0x00000020);
+    wr(dev, RAGE128_WINDOW_XY_OFFSET, 0x00000000);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000000);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, 6u << 16);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), raw);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00184041u);
+    wr(dev, RAGE128_TEX_CNTL_C, tex_cntl);
+    drain_sync(dev);
+    tk_hold(dev);
+    flush_sync(dev);
+
+    /* From here to the third draw: no register write in the GUI block,
+       no drain, no flush. */
+    off1 = tb_draw(dev, 0.0f, 4.0f);
+
+    switch (kind) {
+        case TB_LFB: /* linear aperture, dword stores, the BAR0 handler */
+            for (uint32_t i = 0; i < 16384; i += 4)
+                rage128_lfb_writel(dev->lfb_base + vm + i, TB_NEW, dev);
+            break;
+        case TB_MMDATA: /* MM_INDEX with MM_APER, then MM_DATA */
+            for (uint32_t i = 0; i < 16384; i += 4) {
+                rage128_reg_write(dev, RAGE128_MM_INDEX, RAGE128_MM_INDEX_MM_APER | (vm + i),
+                                  0xffffffffu);
+                rage128_reg_write(dev, RAGE128_MM_DATA, TB_NEW, 0xffffffffu);
+            }
+            break;
+        case TB_AGP_RAM: /* plain guest store into the pages behind the level */
+            for (uint32_t i = 0; i < 16384; i += 4)
+                *(uint32_t *) (ram + TB_PHYS_OLD + i) = TB_NEW;
+            break;
+        case TB_GART_PTE: /* the on-chip table's entries now name other pages */
+            for (uint32_t p = 0; p < 4; p++)
+                tbl[p] = TB_PHYS_NEW + p * 0x1000u;
+            break;
+        case TB_AGP_IMAGE: /* store through the card's AGP image (BAR0 upper half) */
+            for (uint32_t i = 0; i < 16384; i += 4)
+                am->write_l(dev->lfb_base + vm + i, TB_NEW, dev);
+            break;
+        case TB_AGP_BASE: /* the aperture is unarmed: the level's bus reads now fail */
+            rage128_reg_write(dev, RAGE128_AGP_BASE, 0, 0xffffffffu);
+            break;
+    }
+
+    off2  = tb_draw(dev, 8.0f, 14.0f);
+    pend2 = atomic_load(&dev->cce_batch_pending);
+    used2 = ts->used;
+    tk_bm_armed          = 0;
+    tk_bm_reads          = 0;
+    harness_bm_read_hook = tk_bm_hook; /* counts the third capture's bus reads
+                                          (the chipset aperture's reach it) */
+    off3                 = tb_draw(dev, 16.0f, 22.0f);
+    harness_bm_read_hook = NULL;
+    reads3               = tk_bm_reads;
+    used3                = ts->used;
+    tk_end();
+
+    flush_sync(dev);
+    p1 = *(uint32_t *) &dev->svga.vram[HZ_A + (2 * 64 + 2) * 4];
+    p2 = *(uint32_t *) &dev->svga.vram[HZ_A + (9 * 64 + 2) * 4];
+    p3 = *(uint32_t *) &dev->svga.vram[HZ_A + (17 * 64 + 2) * 4];
+    printf("tex batch: t%d %s: par=%d pending_at_draw2=%d off=%08x/%08x/%08x used=%u/%u "
+           "reads3=%u pix=%08x/%08x/%08x\n",
+           rage128_raster_nthreads(dev), name, par, pend2, off1, off2, off3, used2, used3,
+           reads3, p1, p2, p3);
+
+    snprintf(nm, sizeof(nm), "tex batch: t%d %s: draw 2 samples the texels stored before it",
+             rage128_raster_nthreads(dev), name);
+    check32(nm, p2, want);
+    if (par && off1 != R128_TEX_STAGE_NONE) {
+        snprintf(nm, sizeof(nm),
+                 "tex batch: t%d %s: the batch is open and the queued draw keeps its copy",
+                 rage128_raster_nthreads(dev), name);
+        check_true(nm, pend2 == 1 && p1 == TB_OLD && off2 != off1);
+        snprintf(nm, sizeof(nm),
+                 "tex batch: t%d %s: a third draw with no store reuses the second draw's copy",
+                 rage128_raster_nthreads(dev), name);
+        check_true(nm, off3 == off2 && used3 == used2 && p3 == want
+                           && (reads3 != 0 || kind != TB_AGP_IMAGE));
+    }
+
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_PCI_GART_PAGE, 1);
+    wr(dev, RAGE128_AGP_BASE, 0);
+    wr(dev, RAGE128_BM_CHUNK_0_VAL, 0);
+    flush_sync(dev);
+}
+
+/* Parallel CPU lane only. Two levels whose sources share one 64 KB
+   piece of local memory, as row R9 of unit tex-keep: A is staged by the
+   first draw; a store lands in A while the second capture is under way,
+   after it has looked for stores and before it copies B (the bus read
+   of that draw's other level, in AGP memory, makes the store); the
+   third draw binds A again and must sample the store. The first leg
+   runs the same draws without the store and shows A's copy is otherwise
+   reused after B was staged; a texel changed in the staged copy is the
+   witness. All three draws are still queued when the pixels are read
+   back after the flush, so the target shows the last one. */
+static void
+tb_piece(rage128_t *dev)
+{
+    static rage128_raster_state_t rs, rs2;
+    struct rage128_tex_stage     *ts    = &dev->tex_stage;
+    uint32_t                      lin59 = (9u * 64u + 5u) * 4u;
+
+    if (dev->gpu || rage128_raster_nthreads(dev) <= 1) {
+        printf("SKIP tex batch: shared-piece rows (needs the parallel CPU lane)\n");
+        return;
+    }
+    tk_seed(dev, TK_B, 0x33);
+    tk_bm_dev = dev;
+    for (uint32_t i = 0; i < 16384; i += 4)
+        *(uint32_t *) (ram + TB_APER + i) = TB_OLD;
+    pci_wr8(0x04, 0x07);
+    wr(dev, RAGE128_BUS_CNTL, rd(dev, RAGE128_BUS_CNTL) & ~RAGE128_BUS_CNTL_BUS_MASTER_DIS);
+    wr(dev, RAGE128_BM_CHUNK_0_VAL, 0);
+    wr(dev, RAGE128_PCI_GART_PAGE, 1);
+    wr(dev, RAGE128_AGP_BASE, TB_APER);
+    for (int leg = 0; leg < 2; leg++) {
+        uint32_t off1, off3, pend;
+
+        tk_begin(dev);
+        tk_draw(dev, &rs, 0xffffffff, 0);
+        off1 = rs.prim_stage_off[0];
+        if (off1 != R128_TEX_STAGE_NONE)
+            *(uint32_t *) &ts->arena[off1 + lin59] = 0xff5a5a5au;
+        tk_wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000616);
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TB_AGP);
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(1), TK_B | (2u << 30));
+        tk_bm_armed          = leg;
+        tk_bm_reads          = 0;
+        harness_bm_read_hook = tk_bm_hook;
+        tk_draw(dev, &rs2, 0xffffffff, 0);
+        harness_bm_read_hook = NULL;
+        check_true(leg ? "tex batch: shared piece: control: the AGP level's bus read made the store"
+                       : "tex batch: shared piece: control: the AGP level is read from the bus",
+                   tk_bm_reads != 0 && !tk_bm_armed
+                       && *(uint32_t *) &dev->svga.vram[TK_TEX + tl_off(5 * 4, 9, 256)]
+                              == (leg ? 0xff0f1e2du : TK_TEXEL(5, 9)));
+        check_true("tex batch: shared piece: control: B is staged in A's 64 KB piece",
+                   rs2.prim_stage_off[1] != R128_TEX_STAGE_NONE
+                       && rs2.prim_stage_off[1] != off1 && (TK_B >> 16) == (TK_TEX >> 16));
+        tk_wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), TK_TEX | (2u << 30));
+        tk_wr(dev, RAGE128_PRIM_TEX_OFFSET_C(1), 0);
+        tk_draw(dev, &rs, 0xffffffff, 0);
+        off3 = rs.prim_stage_off[0];
+        pend = (uint32_t) atomic_load(&dev->cce_batch_pending);
+        tk_end();
+        flush_sync(dev);
+        printf("tex batch: shared piece leg %d: pending=%u off1=%08x offB=%08x off3=%08x "
+               "pix=%08x\n",
+               leg, pend, off1, rs2.prim_stage_off[1], off3, TK_PIX(5, 9));
+        if (leg) {
+            check32("tex batch: shared piece: a store into A during the capture that stages B "
+                    "shows on the next draw",
+                    TK_PIX(5, 9), 0xff0f1e2du);
+            check_true("tex batch: shared piece: that draw has its own copy and the batch is open",
+                       off3 != off1 && off3 != R128_TEX_STAGE_NONE && pend == 1);
+        } else {
+            check32("tex batch: shared piece: control: with no store A's copy serves the draw "
+                    "after B",
+                    TK_PIX(5, 9), 0xff5a5a5au);
+            check_true("tex batch: shared piece: control: same copy, batch open",
+                       off3 == off1 && off1 != R128_TEX_STAGE_NONE && pend == 1);
+        }
+    }
+    wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+    wr(dev, RAGE128_AGP_BASE, 0);
+    flush_sync(dev);
+}
+
+static void
+run_tex_batch_dev(int threads)
+{
+    rage128_t *dev;
+
+    harness_cfg_render_threads = threads;
+    dev                        = rage128_init(&ati_rage128_pro_device);
+    harness_ram_alloc();
+    atomic_store(&rage128_harness_idle_hook, tk_idle_hook);
+    printf("tex batch: device: render_threads cfg=%d raster_nthreads=%d gpu=%s\n", threads,
+           rage128_raster_nthreads(dev), dev->gpu ? "attached" : "none");
+    tb_leg(dev, "local tiled, aperture store", TL_TEX | (2u << 30), TB_LFB, 0x00000010u);
+    tb_leg(dev, "local tiled, aperture store, TEX_CACHE_FLUSH set", TL_TEX | (2u << 30), TB_LFB,
+           0x00800010u);
+    tb_leg(dev, "local tiled, MM_DATA store", TL_TEX | (2u << 30), TB_MMDATA, 0x00000010u);
+    tb_leg(dev, "local linear (in place), aperture store", TL_TEX, TB_LFB, 0x00000010u);
+    tb_leg(dev, "AGP linear, guest RAM store (PCI GART)", TB_AGP, TB_AGP_RAM, 0x00000010u);
+    tb_leg(dev, "AGP linear, guest RAM store, TEX_CACHE_FLUSH set", TB_AGP, TB_AGP_RAM,
+           0x00800010u);
+    tb_leg(dev, "AGP tiled, guest RAM store (PCI GART)", TB_AGP | (2u << 30), TB_AGP_RAM,
+           0x00000010u);
+    tb_leg(dev, "AGP linear, GART entry rewrite", TB_AGP, TB_GART_PTE, 0x00000010u);
+    tb_leg(dev, "AGP linear, AGP image store (chipset aperture)", TB_AGP, TB_AGP_IMAGE,
+           0x00000010u);
+    tb_leg(dev, "AGP linear, AGP_BASE unarmed (new = all ones)", TB_AGP, TB_AGP_BASE, 0x00000010u);
+    if (threads > 1)
+        tb_piece(dev);
+    atomic_store(&rage128_harness_idle_hook, NULL);
+    close_dev(dev);
+    harness_cfg_render_threads = 1;
+}
+
+static void
+run_tex_batch(void)
+{
+    uint64_t r0 = tk_hold_retries;
+
+    run_tex_batch_dev(2);
+    run_tex_batch_dev(1);
+    printf("tex batch: hold data: legs waited %llu times for an executor pass to end\n",
+           (unsigned long long) (tk_hold_retries - r0));
+}
+#undef TB_OLD
+#undef TB_NEW
+#undef TB_AGP
+#undef TB_PHYS_OLD
+#undef TB_PHYS_NEW
+#undef TB_APER
+#undef TB_TEXEL
+#undef TK_TEX
+#undef TK_WRAP
+#undef TK_NWRAP
+#undef TK_B
+#undef TK_TEXEL
+#undef TK_PIX
+
+/* ------------------------------------------------------------------ */
+/* Unit tex-cache-store: with a GPU backend a tiled level in local     */
+/* memory is copied once and cached across draws. A guest store ends   */
+/* the cached level before its bytes land, because the same check      */
+/* waits for queued GPU work that reads the old bytes; so a draw the   */
+/* executor captures between that check and the bytes caches the level */
+/* again from the old bytes. The store marks set after the bytes       */
+/* (rage128_t tex_stage cst_pg) are what ends that second copy. Each   */
+/* leg stages the level with draw 1, then stores a new texel with a    */
+/* capture forced between the store's check and its bytes              */
+/* (rage128_harness_store_hook), then issues draw 2 after the store    */
+/* handler has returned: the level draw 2 is handed must equal memory, */
+/* and with a real backend its pixel must show the new texel. Two      */
+/* control legs have no capture in that place, or have it at the first */
+/* store of a whole-level upload. The last leg has two levels in one   */
+/* 4 KB page, which share a mark: the store goes into the second, and  */
+/* a draw of the first comes before draw 2, so the first level's copy  */
+/* takes the mark and has to end the second level with it; it runs     */
+/* with an aperture store, which sets the page's mark, and with a      */
+/* legacy window store, which sets the whole-memory mark. One leg's     */
+/* store begins in the page before the level and ends in the level's   */
+/* first page, so only the mark of the store's last page covers it.    */
+/* With no real backend attached the legs run on a fabricated one and  */
+/* judge the staged copy only.                                         */
+/* ------------------------------------------------------------------ */
+#define CS_OLD 0xff102030u
+#define CS_NEW 0xffa0b0c0u
+#define CS_LEN 16384u  /* 64x64 ARGB8888                               */
+#define CS_A   0x1234u /* source byte offset of the watched texel      */
+
+enum { CS_L1, CS_LALL, CS_B4, CS_W2, CS_MMDATA, CS_VGA_B, CS_VGA_L };
+enum { CS_HK_NONE, CS_HK_LAST, CS_HK_FIRST };
+
+static rage128_raster_state_t cs_rs;
+static uint32_t               cs_len = CS_LEN; /* level bytes               */
+static uint32_t               cs_pb  = 256;    /* its tile pitch in bytes   */
+static uint32_t               cs_w   = 64;     /* its width in texels       */
+static uint32_t               cs_lin; /* arena byte of the watched texel */
+static float                  cs_s, cs_t;
+
+static struct {
+    int      armed, skip, draw;
+    uint32_t lo, hi;
+} cs_hk;
+
+static uint32_t
+cs_draw(rage128_t *dev, float y0, float y1, int submit)
+{
+    r3d_vtx_t v[3];
+
+    memset(v, 0, sizeof(v));
+    for (int k = 0; k < 3; k++) {
+        v[k].z       = 0.25f;
+        v[k].rhw     = 1.0f;
+        v[k].diffuse = 0xffffffffu;
+        v[k].s       = cs_s;
+        v[k].t       = cs_t;
+    }
+    v[0].x = 0.0f;
+    v[0].y = y0;
+    v[1].x = 64.0f;
+    v[1].y = y0;
+    v[2].x = 0.0f;
+    v[2].y = y1;
+    rage128_raster_state_capture(dev, &cs_rs);
+    if (submit)
+        rage128_raster_submit_tri(dev, &cs_rs, &v[0], &v[1], &v[2]);
+    return cs_rs.prim_stage_off[0];
+}
+
+/* The capture between a store's check and its bytes: it stands for the
+   executor capturing a draw the guest queued before the store. It runs
+   once, at the store that covers the armed range, after skip earlier
+   ones. */
+static void
+cs_hook(rage128_t *dev, uint32_t addr, uint32_t len)
+{
+    if (!cs_hk.armed || (uint64_t) addr + len <= cs_hk.lo || addr >= cs_hk.hi)
+        return;
+    if (cs_hk.skip) {
+        cs_hk.skip--;
+        return;
+    }
+    cs_hk.armed = 0;
+    cs_draw(dev, 16.0f, 20.0f, cs_hk.draw);
+}
+
+/* Bytes of the staged copy at arena offset off that differ from the
+   level as memory holds it now, detiled the way the staging does. */
+static uint32_t
+cs_diff(rage128_t *dev, uint32_t vm, uint32_t off)
+{
+    static uint8_t            now[CS_LEN];
+    struct rage128_tex_stage *ts = &dev->tex_stage;
+    uint32_t                  n  = 0;
+
+    if (off == R128_TEX_STAGE_NONE || !ts->arena || off + cs_len > ts->cap)
+        return 0xffffffffu;
+    r128_card_copy_tiled(dev, vm, cs_pb, 0, now, cs_len, 0);
+    for (uint32_t i = 0; i < cs_len; i++)
+        n += now[i] != ts->arena[off + i];
+    return n;
+}
+
+static void
+cs_regs(rage128_t *dev, uint32_t raw, uint32_t tex_cntl)
+{
+    wr(dev, 0x16e8, 0x1fff1fff);
+    wr(dev, 0x16ec, 0x00000000);
+    wr(dev, 0x16f0, 0x003f003f);
+    wr(dev, 0x16c0, 0x00000003);
+    wr(dev, 0x16cc, 0xffffffff);
+    wr(dev, 0x1660, 0x00000000);
+    wr(dev, 0x16c4, 0x00000006);
+    wr(dev, RAGE128_PM4_VC_FPU_SETUP,
+       RAGE128_FPU_BACKFACE_SOLID | RAGE128_FPU_FRONTFACE_SOLID | RAGE128_FPU_COLOR_GOURAUD);
+    wr(dev, RAGE128_DST_PITCH_OFFSET_C, 0x01000000u | (HZ_A >> 5));
+    wr(dev, RAGE128_MISC_3D_STATE_CNTL, 0x00000000);
+    wr(dev, RAGE128_PLANE_3D_MASK_C, 0xffffffff);
+    wr(dev, RAGE128_SETUP_CNTL, 0x00000020);
+    wr(dev, RAGE128_WINDOW_XY_OFFSET, 0x00000000);
+    wr(dev, RAGE128_SCALE_3D_CNTL, 0x00000000);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+    wr(dev, RAGE128_PRIM_TEX_CNTL_C, 6u << 16);
+    wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), raw);
+    wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00184041u);
+    wr(dev, RAGE128_TEX_CNTL_C, tex_cntl);
+}
+
+/* Where the source texel at byte a of the level lands in the detiled
+   image, and the texture coordinate that samples it. */
+static void
+cs_locate(rage128_t *dev, uint32_t vm, uint32_t a)
+{
+    static uint8_t b0[CS_LEN], b1[CS_LEN];
+
+    cs_lin = 0;
+    r128_card_copy_tiled(dev, vm, cs_pb, 0, b0, cs_len, 0);
+    dev->svga.vram[vm + a] ^= 0xff;
+    r128_card_copy_tiled(dev, vm, cs_pb, 0, b1, cs_len, 0);
+    dev->svga.vram[vm + a] ^= 0xff;
+    for (uint32_t i = 0; i < cs_len; i++)
+        if (b0[i] != b1[i]) {
+            cs_lin = i & ~3u;
+            break;
+        }
+    cs_s = ((float) ((cs_lin / 4u) % cs_w) + 0.5f) / (float) cs_w;
+    cs_t = ((float) ((cs_lin / 4u) / cs_w) + 0.5f) / (float) cs_w;
+}
+
+/* The new texel stored at local address a through the legacy VGA
+   window's handlers, as installed: one dword, or four bytes with the low
+   byte last. Returns 0 when the path is not reachable here. */
+static int
+cs_store_vga(rage128_t *dev, uint32_t a, int dword)
+{
+    mem_mapping_t *m  = &dev->svga.mapping;
+    uint32_t       w0 = dev->bank_w[0];
+
+    if (!m->write_b || !m->write_l)
+        return 0;
+    dev->bank_w[0] = a & ~0x7fffu; /* the bank is set directly */
+    if (dword)
+        m->write_l(0xa0000u + (a & 0x7fffu), CS_NEW, dev);
+    else
+        for (int i = 3; i >= 0; i--)
+            m->write_b(0xa0000u + ((a + (uint32_t) i) & 0x7fffu), (uint8_t) (CS_NEW >> (8 * i)),
+                       dev);
+    dev->bank_w[0] = w0;
+    return *(uint32_t *) &dev->svga.vram[a] == CS_NEW;
+}
+
+/* The store under test. Returns 0 when the path is not reachable here. */
+static int
+cs_store(rage128_t *dev, uint32_t vm, int kind)
+{
+    uint32_t a = vm + CS_A;
+
+    switch (kind) {
+        case CS_L1: /* one dword through the linear aperture */
+            rage128_lfb_writel(dev->lfb_base + a, CS_NEW, dev);
+            break;
+        case CS_LALL: /* the whole level, the watched texel last */
+            for (uint32_t i = 0; i < CS_LEN; i += 4)
+                if (i != CS_A)
+                    rage128_lfb_writel(dev->lfb_base + vm + i, CS_NEW, dev);
+            rage128_lfb_writel(dev->lfb_base + a, CS_NEW, dev);
+            break;
+        case CS_B4: /* the low byte last: it differs between old and new */
+            for (int i = 3; i >= 0; i--)
+                rage128_lfb_writeb(dev->lfb_base + a + (uint32_t) i,
+                                   (uint8_t) (CS_NEW >> (8 * i)), dev);
+            break;
+        case CS_W2:
+            rage128_lfb_writew(dev->lfb_base + a, (uint16_t) CS_NEW, dev);
+            rage128_lfb_writew(dev->lfb_base + a + 2, (uint16_t) (CS_NEW >> 16), dev);
+            break;
+        case CS_MMDATA:
+            rage128_reg_write(dev, RAGE128_MM_INDEX, RAGE128_MM_INDEX_MM_APER | a, 0xffffffffu);
+            rage128_reg_write(dev, RAGE128_MM_DATA, CS_NEW, 0xffffffffu);
+            break;
+        case CS_VGA_B:
+        case CS_VGA_L:
+            return cs_store_vga(dev, a, kind == CS_VGA_L);
+    }
+    return 1;
+}
+
+/* One leg. real: a real backend is attached, the draws are submitted
+   and draw 2's pixel is read. Otherwise the fabricated backend, and
+   captures only. */
+static void
+cs_leg(rage128_t *dev, const char *name, int kind, int hk, uint32_t tex_cntl, int real)
+{
+    uint32_t raw = TL_TEX | (2u << 30);
+    uint32_t vm  = TL_TEX;
+    uint32_t off2;
+    char     nm[220];
+
+    if (real)
+        flush_sync(dev);
+    for (uint32_t i = 0; i < CS_LEN; i += 4) {
+        *(uint32_t *) &dev->svga.vram[HZ_A + i] = HZ_MARK;
+        rage128_lfb_writel(dev->lfb_base + vm + i, CS_OLD, dev);
+    }
+    cs_regs(dev, raw, tex_cntl);
+    if (real) {
+        drain_sync(dev);
+        flush_sync(dev);
+    }
+    cs_locate(dev, vm, CS_A);
+
+    memset(&cs_hk, 0, sizeof(cs_hk));
+    cs_draw(dev, 0.0f, 4.0f, real);
+
+    cs_hk.lo   = vm + CS_A;
+    cs_hk.hi   = vm + CS_A + 4u;
+    cs_hk.draw = real;
+    cs_hk.skip = hk == CS_HK_FIRST ? 0
+        : kind == CS_B4 || kind == CS_VGA_B ? 3 : kind == CS_W2 ? 1 : 0;
+    if (kind == CS_LALL && hk == CS_HK_FIRST) {
+        cs_hk.lo = vm; /* the first store of the upload */
+        cs_hk.hi = vm + 4u;
+    }
+    cs_hk.armed = hk != CS_HK_NONE;
+    if (!cs_store(dev, vm, kind)) {
+        cs_hk.armed = 0;
+        printf("SKIP tex cache store: %s (%s): this store path is not reachable here\n", name,
+               real ? "real" : "fab");
+        goto out;
+    }
+    cs_hk.armed = 0;
+
+    off2 = cs_draw(dev, 8.0f, 14.0f, real);
+    snprintf(nm, sizeof(nm), "tex cache store: %s (%s): the level draw 2 samples equals memory",
+             name, real ? "real" : "fab");
+    check32(nm, cs_diff(dev, vm, off2), 0);
+    if (real) {
+        flush_sync(dev);
+        snprintf(nm, sizeof(nm),
+                 "tex cache store: %s (real): draw 2 shows the texel stored before it", name);
+        check32(nm, *(uint32_t *) &dev->svga.vram[HZ_A + (9 * 64 + 2) * 4], CS_NEW);
+    }
+out:
+    if (real) {
+        flush_sync(dev);
+        wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+        wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+        flush_sync(dev);
+    } else
+        rage128_gpu_cpu_barrier(dev, vm, CS_LEN, 1); /* end the cached level */
+}
+
+/* Two 16x16 levels, 1 KB each, in one 4 KB page. Both are cached; the
+   store goes into the second with a capture of it between the check
+   and the bytes; then the first is drawn, then the second (draw 2). The
+   texture is switched with wr_nomark: the register write stores no
+   texel, and the mark wr() leaves would end every cached level by
+   itself. vga: the store goes through the legacy window. */
+static void
+cs_leg_shared(rage128_t *dev, int vga, int real)
+{
+    const char *name = vga ? "two levels, legacy VGA window store into the second, first drawn next"
+                           : "two levels in one page, store into the second, first drawn next";
+    int         ok;
+    uint32_t    va   = TL_TEX;
+    uint32_t    vb   = TL_TEX + 1024u;
+    uint32_t    a    = 0x134u;
+    uint32_t    off2;
+    char        nm[220];
+
+    cs_len = 1024u;
+    cs_pb  = 64u;
+    cs_w   = 16u;
+    if (real)
+        flush_sync(dev);
+    for (uint32_t i = 0; i < CS_LEN; i += 4)
+        *(uint32_t *) &dev->svga.vram[HZ_A + i] = HZ_MARK;
+    for (uint32_t i = 0; i < 2048u; i += 4)
+        rage128_lfb_writel(dev->lfb_base + va + i, CS_OLD, dev);
+    cs_regs(dev, va | (2u << 30), 0x10u);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00004444);
+    if (real) {
+        drain_sync(dev);
+        flush_sync(dev);
+    }
+    cs_locate(dev, vb, a);
+    memset(&cs_hk, 0, sizeof(cs_hk));
+    cs_draw(dev, 0.0f, 4.0f, real); /* the first level is cached */
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), vb | (2u << 30));
+    cs_draw(dev, 4.0f, 8.0f, real); /* and the second */
+
+    cs_hk.lo    = vb + a;
+    cs_hk.hi    = vb + a + 4u;
+    cs_hk.draw  = real;
+    cs_hk.armed = 1;
+    if (vga)
+        ok = cs_store_vga(dev, vb + a, 1);
+    else {
+        rage128_lfb_writel(dev->lfb_base + vb + a, CS_NEW, dev);
+        ok = 1;
+    }
+    cs_hk.armed = 0;
+    if (!ok) {
+        printf("SKIP tex cache store: %s (%s): this store path is not reachable here\n", name,
+               real ? "real" : "fab");
+        goto out;
+    }
+
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), va | (2u << 30));
+    cs_draw(dev, 20.0f, 24.0f, real);
+    wr_nomark(dev, RAGE128_PRIM_TEX_OFFSET_C(0), vb | (2u << 30));
+    off2 = cs_draw(dev, 8.0f, 14.0f, real);
+    snprintf(nm, sizeof(nm), "tex cache store: %s (%s): the level draw 2 samples equals memory",
+             name, real ? "real" : "fab");
+    check32(nm, cs_diff(dev, vb, off2), 0);
+    if (real) {
+        flush_sync(dev);
+        snprintf(nm, sizeof(nm),
+                 "tex cache store: %s (real): draw 2 shows the texel stored before it", name);
+        check32(nm, *(uint32_t *) &dev->svga.vram[HZ_A + (9 * 64 + 2) * 4], CS_NEW);
+    }
+out:
+    if (real) {
+        flush_sync(dev);
+        wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+        wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+        flush_sync(dev);
+    } else
+        rage128_gpu_cpu_barrier(dev, va, 2048u, 1); /* end the cached levels */
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+    cs_len = CS_LEN;
+    cs_pb  = 256u;
+    cs_w   = 64u;
+}
+
+/* One 16x16 level that begins on a page boundary, and an unaligned
+   dword store whose first two bytes lie in the page before it and whose
+   last two are the low half of the level's first texel. */
+static void
+cs_leg_cross(rage128_t *dev, int real)
+{
+    const char *name = "dword store across a page boundary into the level";
+    uint32_t    vb   = TL_TEX + 0x1000u;
+    uint32_t    want = (CS_OLD & 0xffff0000u) | (CS_NEW >> 16);
+    uint32_t    off2;
+    char        nm[220];
+
+    cs_len = 1024u;
+    cs_pb  = 64u;
+    cs_w   = 16u;
+    if (real)
+        flush_sync(dev);
+    for (uint32_t i = 0; i < CS_LEN; i += 4)
+        *(uint32_t *) &dev->svga.vram[HZ_A + i] = HZ_MARK;
+    for (uint32_t i = 0; i < 2048u; i += 4)
+        rage128_lfb_writel(dev->lfb_base + vb - 1024u + i, CS_OLD, dev);
+    cs_regs(dev, vb | (2u << 30), 0x10u);
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00004444);
+    if (real) {
+        drain_sync(dev);
+        flush_sync(dev);
+    }
+    cs_locate(dev, vb, 0);
+    memset(&cs_hk, 0, sizeof(cs_hk));
+    cs_draw(dev, 0.0f, 4.0f, real);
+
+    cs_hk.lo    = vb - 2u;
+    cs_hk.hi    = vb + 2u;
+    cs_hk.draw  = real;
+    cs_hk.armed = 1;
+    rage128_lfb_writel(dev->lfb_base + vb - 2u, CS_NEW, dev);
+    cs_hk.armed = 0;
+
+    off2 = cs_draw(dev, 8.0f, 14.0f, real);
+    snprintf(nm, sizeof(nm), "tex cache store: %s (%s): the level draw 2 samples equals memory",
+             name, real ? "real" : "fab");
+    check32(nm, cs_diff(dev, vb, off2), 0);
+    snprintf(nm, sizeof(nm), "tex cache store: %s (%s): the store changed the level's first texel",
+             name, real ? "real" : "fab");
+    check32(nm, *(uint32_t *) &dev->svga.vram[vb], want);
+    if (real) {
+        flush_sync(dev);
+        snprintf(nm, sizeof(nm),
+                 "tex cache store: %s (real): draw 2 shows the texel stored before it", name);
+        check32(nm, *(uint32_t *) &dev->svga.vram[HZ_A + (9 * 64 + 2) * 4], want);
+        flush_sync(dev);
+        wr(dev, RAGE128_TEX_CNTL_C, 0x00000000);
+        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+        wr(dev, RAGE128_PRIM_TEX_COMBINE_CNTL_C, 0x00000000);
+        flush_sync(dev);
+    } else
+        rage128_gpu_cpu_barrier(dev, vb, 1024u, 1); /* end the cached level */
+    wr(dev, RAGE128_TEX_SIZE_PITCH_C, 0x00000606);
+    cs_len = CS_LEN;
+    cs_pb  = 256u;
+    cs_w   = 64u;
+}
+
+static void
+cs_legs(rage128_t *dev, int real)
+{
+    cs_leg(dev, "aperture dword, no capture in between (control)", CS_L1, CS_HK_NONE, 0x10u, real);
+    cs_leg(dev, "aperture dword", CS_L1, CS_HK_LAST, 0x10u, real);
+    cs_leg(dev, "aperture dword, TEX_CACHE_FLUSH set", CS_L1, CS_HK_LAST, 0x00800010u, real);
+    cs_leg(dev, "aperture dwords, whole level, capture at the last store", CS_LALL, CS_HK_LAST,
+           0x10u, real);
+    cs_leg(dev, "aperture dwords, whole level, capture at the first store (control)", CS_LALL,
+           CS_HK_FIRST, 0x10u, real);
+    cs_leg(dev, "aperture bytes, capture at the last of 4", CS_B4, CS_HK_LAST, 0x10u, real);
+    cs_leg(dev, "aperture words, capture at the last of 2", CS_W2, CS_HK_LAST, 0x10u, real);
+    cs_leg(dev, "MM_INDEX + MM_DATA", CS_MMDATA, CS_HK_LAST, 0x10u, real);
+    cs_leg(dev, "legacy VGA window bytes, capture at the last of 4", CS_VGA_B, CS_HK_LAST, 0x10u,
+           real);
+    cs_leg(dev, "legacy VGA window dword", CS_VGA_L, CS_HK_LAST, 0x10u, real);
+    cs_leg_shared(dev, 0, real);
+    cs_leg_shared(dev, 1, real);
+    cs_leg_cross(dev, real);
+}
+
+static void
+run_tex_cache_store(void)
+{
+    rage128_t *dev = rage128_init(&ati_rage128_pro_device);
+
+    harness_ram_alloc();
+    cs_regs(dev, TL_TEX | (2u << 30), 0x10u); /* a GUI register write starts a deferred backend */
+    atomic_store(&rage128_harness_store_hook, cs_hook);
+    if (dev->gpu)
+        cs_legs(dev, 1);
+    else if (!harness_gpu_available())
+        printf("SKIP tex cache store: built without Vulkan headers\n");
+    else {
+        void *fab, *old_raster = dev->raster;
+
+        flush_sync(dev);
+        cs_regs(dev, TL_TEX | (2u << 30), 0x10u);
+        dev->raster = NULL;
+        rage128_raster_state_capture(dev, &cs_rs); /* pre-size the arena */
+        fab = harness_gpu_fab_alloc();
+        fab_in(dev, fab);
+        cs_legs(dev, 0);
+        fab_out(dev);
+        harness_gpu_fab_free(fab);
+        dev->raster = old_raster;
+        wr(dev, RAGE128_TEX_CNTL_C, 0);
+        wr(dev, RAGE128_PRIM_TEX_OFFSET_C(0), 0);
+        flush_sync(dev);
+    }
+    atomic_store(&rage128_harness_store_hook, NULL);
+    close_dev(dev);
+}
+/* The capture threads' grouping handshake under stress
+   (harness_gpu_group_wake): rounds sized to finish as the submit thread
+   turns from spinning to sleeping, where a completion that neither
+   signals nor is seen leaves the submit thread asleep for good. The row
+   needs rounds that reached the sleep, or it proves nothing.
+   R128_CAPWAKE_ROUNDS sets the round count for a longer stress run. */
+static void
+run_gpu_cap_wake(void)
+{
+    uint32_t rounds = 4000, lost, slept, lo, hi;
+    int      r;
+    char     nm[96];
+
+    if (getenv("R128_CAPWAKE_ROUNDS"))
+        rounds = (uint32_t) strtoul(getenv("R128_CAPWAKE_ROUNDS"), NULL, 0);
+    r = harness_gpu_group_wake(rounds, &lost, &slept, &lo, &hi);
+    if (!r) {
+        printf("SKIP gpu cap wake: no capture threads (built without Vulkan headers)\n");
+        return;
+    }
+    printf("gpu cap wake: rounds=%u lost=%u slept=%u rows=%u..%u\n", rounds, lost,
+           slept, lo, hi);
+    check_true("gpu cap wake: the loop finishes", r > 0);
+    check_true("gpu cap wake: rounds reached the sleep", slept > 0);
+    snprintf(nm, sizeof(nm), "gpu cap wake: lost wakeups in %u rounds", rounds);
+    check32(nm, lost, 0);
+}
+#undef CS_OLD
+#undef CS_NEW
+#undef CS_LEN
+#undef CS_A
+
 static const char *const shard_units[] = {
     "gpu-tuple-reload", "inline-pace", "agp-oracle",
     "agp-16mb", "pci-xpert128", "pci-variant", "monid-mask", "amcgpio",
@@ -31264,7 +33297,8 @@ static const char *const shard_units[] = {
     "gpu2d-verify",
     "x64legs", "synctel", "yuv-border", "texture-alpha", "dither-init",
     "sec-persp", "sec-only", "dst-1555-4444", "zoff-tfog",
-    "stipple-fast", "lanegap-expectedfail", "gpu-carry", "gpu-r2d"
+    "stipple-fast", "lanegap-expectedfail", "gpu-carry", "gpu-r2d", "tex-keep",
+    "tex-batch", "tex-cache-store", "gpu-stage-modes", "gpu-cap-wake"
 };
 static char *selected_units;
 
@@ -31973,6 +34007,8 @@ main(int argc, char **argv)
         run_gpu2d_verify();
     if (unit_selected("gpu-carry"))
         run_gpu_carry();
+    if (unit_selected("gpu-stage-modes"))
+        run_gpu_stage_modes();
     if (unit_selected("gpu-r2d"))
         run_r2d();
     if (unit_selected("x64legs"))
@@ -31995,6 +34031,14 @@ main(int argc, char **argv)
         run_zoff_tfog(argc > 1 && !strcmp(argv[1], "-v"));
     if (unit_selected("stipple-fast"))
         run_stipple_fast(argc > 1 && !strcmp(argv[1], "-v"));
+    if (unit_selected("tex-keep"))
+        run_tex_keep();
+    if (unit_selected("tex-batch"))
+        run_tex_batch();
+    if (unit_selected("tex-cache-store"))
+        run_tex_cache_store();
+    if (unit_selected("gpu-cap-wake"))
+        run_gpu_cap_wake();
     if (getenv("R128_LANEGAP"))
         if (unit_selected("lanegap-expectedfail"))
             run_lanegap_expectedfail();
