@@ -27,7 +27,9 @@
    as mem_mapping_recalc() does from a device thread: an IN from this port
    flushes the lookup tables from a second thread while the CPU thread waits
    for it, and reads as open bus. The CPU thread's own one-entry caches and
-   the entries an instruction has already taken stay as they are. */
+   the entries an instruction has already taken stay as they are. Always
+   live, as the CPU-thread flush at 0xef is: the generator draws no IN, and
+   no hand case reads port 0xf0 without meaning it. */
 #define HARNESS_PORT_FLUSH_OTHER 0xf0
 
 typedef struct harness_pg_t {

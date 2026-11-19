@@ -136,7 +136,8 @@ harness_pg_usage(void)
 {
     fprintf(stderr,
             "  --pg                 also capture, compare and print CR2, CR3, CR4 at the halt and the\n"
-            "                       record page's result block (16 dwords at %05x)\n"
+            "                       record page's result block (16 dwords at %05x); printed as RUNSTATE\n"
+            "                       lines, which --quiet leaves out for a case whose runs all agree\n"
             "  --watch <a>[,<b>...] (implies --pg) also the dwords at these physical addresses (hex,\n"
             "                       up to %d): page-table entries as the run left them\n"
             "  --lookups <a>[,...]  after every run, to stderr: the read and write lookup entries of\n"
