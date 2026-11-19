@@ -17,6 +17,7 @@ add_executable(cpu_harness
     harness_dbg.c
     harness_io.c
     gen.c
+    harness_pg.c
     stubs.c
     ${CMAKE_SOURCE_DIR}/src/io.c
     ${CMAKE_SOURCE_DIR}/src/mem/mem.c
@@ -28,4 +29,5 @@ add_executable(cpu_harness
 
 set_target_properties(cpu_harness PROPERTIES MACOSX_BUNDLE FALSE)
 target_include_directories(cpu_harness PRIVATE ${CMAKE_SOURCE_DIR}/src/cpu ${CMAKE_SOURCE_DIR}/src/codegen)
-target_link_libraries(cpu_harness cpu cgt dynarec softfloat3e)
+find_package(Threads REQUIRED)
+target_link_libraries(cpu_harness cpu cgt dynarec softfloat3e Threads::Threads)

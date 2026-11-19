@@ -68,6 +68,7 @@
 
 #include "harness.h"
 #include "harness_dbg.h"
+#include "harness_pg.h"
 
 int harness_verbose = 0;
 
@@ -107,6 +108,7 @@ typedef struct harness_state_t {
     uint32_t code_bytes;  /* code page bytes the run left changed */
     uint32_t code_first;  /* the lowest of them */
     uint64_t code_hash;   /* over the code page as the run left it */
+    harness_pg_t pg;      /* --pg, --watch: zero without them */
     uint8_t  data[HARNESS_PAGE];
     harness_dbg_state_t dbg; /* --dbg-state */
 } harness_state_t;
@@ -1090,6 +1092,7 @@ capture(harness_state_t *s, int status)
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
     /* Before the stray pages are put back: the frame may be on one. */
     harness_dbg_capture(&s->dbg, status);
+    harness_pg_capture(&s->pg);
     capture_stray_pages(s);
     capture_code_page(s);
 }
@@ -1219,6 +1222,7 @@ compare(const harness_state_t *a, const harness_state_t *b)
         diff("fault", a->vector, b->vector);
     if (a->tos != b->tos)
         diff("fault.tos", a->tos, b->tos);
+    harness_pg_compare(&a->pg, &b->pg, diff);
     for (int i = 0; i < HARNESS_PAGE; i++) {
         if (a->data[i] != b->data[i]) {
             snprintf(name, sizeof(name), "data+%03x", i);
@@ -1271,7 +1275,8 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
         || memcmp(a->st_exp, b->st_exp, sizeof(a->st_exp)) || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
         || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash
-        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash || harness_dbg_differs(&a->dbg, &b->dbg);
+        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash || harness_dbg_differs(&a->dbg, &b->dbg)
+        || harness_pg_differs(&a->pg, &b->pg);
 }
 
 /* ---- a case ---------------------------------------------------------- */
@@ -1560,8 +1565,10 @@ run_case(const harness_case_t *c)
         }
         dump_case_hex(c);
     }
-    for (int r = 0; r < nruns; r++)
+    for (int r = 0; r < nruns; r++) {
         harness_dbg_state_line(run_name[r], body_start, &st[r].dbg);
+        harness_pg_state_line(run_name[r], &st[r].pg);
+    }
     cur_case = NULL;
     return result | (no_body ? 16 : 0);
 }
@@ -1639,6 +1646,7 @@ usage(void)
             "                       not with --verbose\n",
             harness_gen_class_names(), MAX_RUNS);
     harness_dbg_usage();
+    harness_pg_usage();
 }
 
 /* The lines that end a run's output. */
@@ -2323,6 +2331,9 @@ main(int argc, char **argv)
             list = argv[++i];
         } else if (harness_dbg_option(argv[i])) {
             continue;
+        } else if ((r = harness_pg_option(argc, argv, &i))) {
+            if (r < 0)
+                return 2;
         } else {
             usage();
             return 2;

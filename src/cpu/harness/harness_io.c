@@ -18,6 +18,7 @@
  *            ECh-EDh  the TSC device (harness.c)
  *            EEh      the SMI device (harness.c)
  *            EFh      the remapping device: a read flushes the lookups
+ *            F0h      the same flush from another thread (harness_pg.h)
  *            500h-507h the counting device (harness_dbg.h)
  *          and every other port reads as open bus and drops writes.
  */
@@ -32,6 +33,7 @@
 
 #include "harness.h"
 #include "harness_dbg.h"
+#include "harness_pg.h"
 
 /* A device that writes RAM the way a bus master does, past the CPU's write
    path, so a case can test that such a write drops the blocks compiled from
@@ -52,7 +54,9 @@ harness_port_read(uint16_t port)
     if (port == HARNESS_PORT_FLUSH) {
         harness_flush_reads++;
         flushmmucache_nopc();
-    } else if (is_count_port(port))
+    } else if (port == HARNESS_PORT_FLUSH_OTHER)
+        harness_flush_other();
+    else if (is_count_port(port))
         harness_port_reads++;
 }
 
