@@ -129,6 +129,7 @@ dump_case_hex(const harness_case_t *c)
     fprintf(stderr, "  body:");
     for (int i = 0; i < c->body_len; i++)
         fprintf(stderr, "%02x", c->body[i]);
+    harness_pages_dump(c);
     fprintf(stderr, "\n");
 }
 

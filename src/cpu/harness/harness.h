@@ -113,6 +113,7 @@ extern uint32_t harness_tsc_read(void);
 extern int  harness_pages_parse(const char *s, harness_case_t *c);
 extern void harness_pages_load(const harness_case_t *c, const uint8_t *ref);
 extern int  harness_pages_own(uint32_t addr);
+extern void harness_pages_dump(const harness_case_t *c);
 extern void harness_pages_capture(uint32_t *bytes, uint32_t *first, uint64_t *hash);
 extern void harness_meas_capture(uint32_t *meas);
 extern void harness_meas_print(const uint32_t *meas, const char *run);

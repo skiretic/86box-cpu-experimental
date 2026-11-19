@@ -80,6 +80,10 @@ harness_rom_setup(void)
 
 /* ---- extra pages ----------------------------------------------------- */
 
+/* The hand cases' paging include (pg.inc): its page directory and table. */
+#define PAGES_PG_DIR   0x20000
+#define PAGES_PG_TABLE 0x21000
+
 /* The case whose pages are in RAM, and so owned, since its last load, and
    the addresses loaded then: the case may be overwritten in place by the
    next one before that is loaded. */
@@ -109,6 +113,14 @@ harness_pages_parse(const char *s, harness_case_t *c)
         phys = strtoul(s + 1, &end, 16);
         if ((end == s + 1) || (phys & (HARNESS_PAGE - 1)) || (phys < HARNESS_PAGES_LOW) || (phys > 0xfffff000UL)) {
             fprintf(stderr, "an extra page is @<phys>, page aligned and from %x up\n", HARNESS_PAGES_LOW);
+            return -1;
+        }
+        /* The paging include's page directory and table, which its cases
+           write; and the upper memory area, where RAM is not what the CPU
+           sees, but for the --rom window. */
+        if ((phys == PAGES_PG_DIR) || (phys == PAGES_PG_TABLE) ||
+            ((phys >= 0xa0000) && (phys < 0x100000) && ((phys < HARNESS_ROM) || (phys >= HARNESS_ROM + HARNESS_ROM_SIZE)))) {
+            fprintf(stderr, "extra page %lx is a page the harness or the paging include uses\n", phys);
             return -1;
         }
         for (int i = 0; i < c->pages_nr; i++) {
@@ -170,6 +182,8 @@ harness_pages_load(const harness_case_t *c, const uint8_t *ref)
     if (harness_rom)
         memset(rom_buf, 0xf4, sizeof(rom_buf));
     for (int i = 0; i < c->pages_nr; i++) {
+        if ((c->pages[i].phys >= HARNESS_ROM) && (c->pages[i].phys < (HARNESS_ROM + HARNESS_ROM_SIZE)) && !harness_rom)
+            harness_fatal("an extra page in the ROM window needs --rom");
         if (in_rom(c->pages[i].phys)) {
             memcpy(rom_buf + (c->pages[i].phys - HARNESS_ROM), c->pages[i].bytes, HARNESS_PAGE);
             continue;
@@ -255,4 +269,20 @@ harness_meas_print(const uint32_t *meas, const char *run)
     for (int i = 1; i <= REC_MEAS_NR; i++)
         printf(" x3m%d=%08x", i - 1, meas[i]);
     printf("\n");
+}
+
+/* After the body in a case's dump: each page as its hex text gives it,
+   without the HLT fill past its last other byte, so the dump reruns it. */
+void
+harness_pages_dump(const harness_case_t *c)
+{
+    for (int p = 0; p < c->pages_nr; p++) {
+        int n = HARNESS_PAGE;
+
+        while (n && (c->pages[p].bytes[n - 1] == 0xf4))
+            n--;
+        fprintf(stderr, " @%x ", c->pages[p].phys);
+        for (int i = 0; i < n; i++)
+            fprintf(stderr, "%02x", c->pages[p].bytes[i]);
+    }
 }
