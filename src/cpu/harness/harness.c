@@ -67,6 +67,7 @@
 #include "codegen_link.h"
 
 #include "harness.h"
+#include "harness_dbg.h"
 
 int harness_verbose = 0;
 
@@ -107,6 +108,7 @@ typedef struct harness_state_t {
     uint32_t code_first;  /* the lowest of them */
     uint64_t code_hash;   /* over the code page as the run left it */
     uint8_t  data[HARNESS_PAGE];
+    harness_dbg_state_t dbg; /* --dbg-state */
 } harness_state_t;
 
 /* The recompiler marks a block on its first visit (interpreted), compiles
@@ -577,6 +579,7 @@ hard_reset_machine(int first)
         restore_memory();
     step("resetx86");
     resetx86();
+    harness_io_reset();
 }
 
 static void
@@ -893,6 +896,7 @@ load_case(const harness_case_t *c, int with_code)
     cpu_CR4_mask   = ref_cr4_mask;
     cpu_CR4_ignore = ref_cr4_ignore;
     cpu_dr7_update();
+    harness_dbg_load();
     cpu_cache_int_enabled = hascache && !(cr0 & (1 << 30));
     if (hascache)
         cpu_update_waitstates();
@@ -1084,6 +1088,8 @@ capture(harness_state_t *s, int status)
     s->tos       = get32(HARNESS_RECORD + REC_TOS);
     s->tsc_delta = get32(HARNESS_RECORD + REC_TSC_DELTA) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_DELTA + 4) << 32);
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
+    /* Before the stray pages are put back: the frame may be on one. */
+    harness_dbg_capture(&s->dbg, status);
     capture_stray_pages(s);
     capture_code_page(s);
 }
@@ -1227,6 +1233,7 @@ compare(const harness_state_t *a, const harness_state_t *b)
         diff("code.bytes", a->code_bytes, b->code_bytes);
     else if (a->code_hash != b->code_hash)
         diff("code.hash", a->code_hash, b->code_hash);
+    harness_dbg_compare(&a->dbg, &b->dbg, diff);
     return diff_lines;
 }
 
@@ -1251,6 +1258,7 @@ dump_state(const harness_state_t *s)
         printf("    stores outside the data page: %u page(s), first at %08x, hash %016" PRIx64 "\n", s->stray_pages, s->stray_first, s->stray_hash);
     if (s->code_bytes)
         printf("    stores to the code page: %u byte(s), first at %08x, hash %016" PRIx64 "\n", s->code_bytes, s->code_first, s->code_hash);
+    harness_dbg_dump(&s->dbg);
 }
 
 /* Same test as compare(), without the printing. */
@@ -1263,7 +1271,7 @@ compare_silent(const harness_state_t *a, const harness_state_t *b)
         || a->top != b->top || memcmp(a->tag, b->tag, sizeof(a->tag)) || memcmp(a->st, b->st, sizeof(a->st))
         || memcmp(a->st_exp, b->st_exp, sizeof(a->st_exp)) || memcmp(a->mm, b->mm, sizeof(a->mm)) || a->ismmx != b->ismmx || a->vector != b->vector || a->tos != b->tos
         || memcmp(a->data, b->data, sizeof(a->data)) || a->stray_pages != b->stray_pages || a->stray_hash != b->stray_hash
-        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash;
+        || a->code_bytes != b->code_bytes || a->code_hash != b->code_hash || harness_dbg_differs(&a->dbg, &b->dbg);
 }
 
 /* ---- a case ---------------------------------------------------------- */
@@ -1552,6 +1560,8 @@ run_case(const harness_case_t *c)
         }
         dump_case_hex(c);
     }
+    for (int r = 0; r < nruns; r++)
+        harness_dbg_state_line(run_name[r], body_start, &st[r].dbg);
     cur_case = NULL;
     return result | (no_body ? 16 : 0);
 }
@@ -1628,6 +1638,7 @@ usage(void)
             "                       (until then it is <stdout file>.part, <stderr file>.part);\n"
             "                       not with --verbose\n",
             harness_gen_class_names(), MAX_RUNS);
+    harness_dbg_usage();
 }
 
 /* The lines that end a run's output. */
@@ -2310,6 +2321,8 @@ main(int argc, char **argv)
             harness_verbose = 1;
         } else if (!strcmp(argv[i], "--list") && i + 1 < argc) {
             list = argv[++i];
+        } else if (harness_dbg_option(argv[i])) {
+            continue;
         } else {
             usage();
             return 2;
