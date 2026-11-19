@@ -15,6 +15,7 @@
  *          an empty port, and never splits a word or dword access into
  *          byte accesses. What it does by port:
  *            E0h-E8h  the RAM writer (below)
+ *            EAh      the TSC read port: a read returns the TSC (harness_tsc.c)
  *            ECh-EDh  the TSC device (harness.c)
  *            EEh      the SMI device (harness.c)
  *            EFh      the remapping device: a read flushes the lookups
@@ -48,7 +49,8 @@ is_count_port(uint16_t port)
     return (port >= HARNESS_PORT_COUNT) && (port < (HARNESS_PORT_COUNT + HARNESS_PORT_COUNT_SIZE));
 }
 
-static void
+/* What a read returns, cut to the access size: open bus but for the TSC. */
+static uint32_t
 harness_port_read(uint16_t port)
 {
     if (port == HARNESS_PORT_FLUSH) {
@@ -56,32 +58,32 @@ harness_port_read(uint16_t port)
         flushmmucache_nopc();
     } else if (port == HARNESS_PORT_FLUSH_OTHER)
         harness_flush_other();
+    else if (port == HARNESS_PORT_TSC_READ)
+        return harness_tsc_read();
     else if (is_count_port(port))
         harness_port_reads++;
+    return 0xffffffff;
 }
 
 static uint8_t
 harness_inb(uint16_t port, void *priv)
 {
     (void) priv;
-    harness_port_read(port);
-    return 0xff;
+    return (uint8_t) harness_port_read(port);
 }
 
 static uint16_t
 harness_inw(uint16_t port, void *priv)
 {
     (void) priv;
-    harness_port_read(port);
-    return 0xffff;
+    return (uint16_t) harness_port_read(port);
 }
 
 static uint32_t
 harness_inl(uint16_t port, void *priv)
 {
     (void) priv;
-    harness_port_read(port);
-    return 0xffffffff;
+    return (uint32_t) harness_port_read(port);
 }
 
 static void

@@ -109,6 +109,7 @@ typedef struct harness_state_t {
     uint32_t code_first;  /* the lowest of them */
     uint64_t code_hash;   /* over the code page as the run left it */
     harness_pg_t pg;      /* --pg, --watch: zero without them */
+    uint32_t meas[1 + REC_MEAS_NR]; /* the case's measurements, not compared */
     uint8_t  data[HARNESS_PAGE];
     harness_dbg_state_t dbg; /* --dbg-state */
 } harness_state_t;
@@ -132,6 +133,7 @@ dump_case_hex(const harness_case_t *c)
     fprintf(stderr, "  body:");
     for (int i = 0; i < c->body_len; i++)
         fprintf(stderr, "%02x", c->body[i]);
+    harness_pages_dump(c);
     fprintf(stderr, "\n");
 }
 
@@ -784,8 +786,10 @@ load_case(const harness_case_t *c, int with_code)
 
     cur_phase = "state load";
 
-    if (with_code)
+    if (with_code) {
         memcpy(ram + HARNESS_CODE, code_image, HARNESS_PAGE);
+        harness_pages_load(c, ram_ref);
+    }
     memcpy(ram + HARNESS_DATA, c->data, HARNESS_PAGE);
     memset(ram + HARNESS_STACK, 0, HARNESS_PAGE);
     memset(ram + HARNESS_RECORD, 0, HARNESS_PAGE);
@@ -986,7 +990,7 @@ load_case(const harness_case_t *c, int with_code)
 static int
 case_owns_page(uint32_t addr)
 {
-    return addr == HARNESS_RECORD || addr == HARNESS_STACK || addr == HARNESS_DATA || addr == HARNESS_CODE;
+    return addr == HARNESS_RECORD || addr == HARNESS_STACK || addr == HARNESS_DATA || addr == HARNESS_CODE || harness_pages_own(addr);
 }
 
 /* Every other page must still match the reference taken after setup. One
@@ -1093,8 +1097,10 @@ capture(harness_state_t *s, int status)
     /* Before the stray pages are put back: the frame may be on one. */
     harness_dbg_capture(&s->dbg, status);
     harness_pg_capture(&s->pg);
+    harness_meas_capture(s->meas);
     capture_stray_pages(s);
     capture_code_page(s);
+    harness_pages_capture(&s->code_bytes, &s->code_first, &s->code_hash);
 }
 
 /* The arm64 backend's blocks hold the guest's x87 and MMX registers in
@@ -1562,6 +1568,7 @@ run_case(const harness_case_t *c)
         for (int r = 0; r < nruns; r++) {
             printf("  %s:\n", run_name[r]);
             dump_state(&st[r]);
+            harness_meas_print(st[r].meas, run_name[r]);
         }
         dump_case_hex(c);
     }
@@ -1595,7 +1602,8 @@ parse_hex(const char *s, uint8_t *out, int max)
 {
     int n = 0;
 
-    while (*s) {
+    /* The extra pages, from the first "@", are harness_pages_parse()'s. */
+    while (*s && (*s != '@')) {
         unsigned v;
         if (*s == ' ' || *s == ',') {
             s++;
@@ -1614,7 +1622,9 @@ usage(void)
 {
     fprintf(stderr,
             "cpu_harness: run a code blob under the interpreter and the recompiler and diff the state\n"
-            "  --hex <bytes>        body as hex (32-bit flat; EBX, ESI, EDI point into the data page)\n"
+            "  --hex <bytes>        body as hex (32-bit flat; EBX, ESI, EDI point into the data page);\n"
+            "                       then \"@<phys> <bytes>\" per extra page (at most %d, page aligned,\n"
+            "                       from 9000h): loaded, owned and compared as the code page is\n"
             "  --bin <file>         body from a file\n"
             "  --seed <n>           one generated case\n"
             "  --seeds <a>-<b>      generated cases a..b\n"
@@ -1632,6 +1642,9 @@ usage(void)
             "  --fpu-type <n>       fpu_type forced to n (cpu.h's FPU_ order, default the CPU's own\n"
             "                       FPU, else the last coprocessor its table entry lists)\n"
             "  --dbg486             the 486 debug registers option on\n"
+            "  --rom                a 64 KB ROM window at e0000h (external bus, ROM wait states,\n"
+            "                       read-only); a hex body's \"@<phys>\" pages there fill it\n"
+            "  --mca                the machine has an MCA bus (no ROM prefetch multiply)\n"
             "  --passes <n>         at most n recompiler runs after the interpreter run (default %d:\n"
             "                       mark pass, compile passes until one compiles nothing, compiled 2)\n"
             "  --dump               print every run's final state\n"
@@ -1644,7 +1657,7 @@ usage(void)
             "                       other options given here prints, when the case has finished\n"
             "                       (until then it is <stdout file>.part, <stderr file>.part);\n"
             "                       not with --verbose\n",
-            harness_gen_class_names(), MAX_RUNS);
+            HARNESS_PAGES_MAX, harness_gen_class_names(), MAX_RUNS);
     harness_dbg_usage();
     harness_pg_usage();
 }
@@ -2176,7 +2189,7 @@ run_list(const char *list, harness_case_t *c, int mode16)
         }
         default_case(c);
         c->body_len = parse_hex(e[i].hex, c->body, HARNESS_BODY_MAX);
-        if (c->body_len < 0) {
+        if ((c->body_len < 0) || (harness_pages_parse(e[i].hex, c) < 0)) {
             fprintf(stderr, "bad hex body\n");
             rc = 2;
         } else {
@@ -2244,7 +2257,7 @@ main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hex") && i + 1 < argc) {
             c->body_len = parse_hex(argv[++i], c->body, HARNESS_BODY_MAX);
-            if (c->body_len < 0) {
+            if ((c->body_len < 0) || (harness_pages_parse(argv[i], c) < 0)) {
                 fprintf(stderr, "bad hex body\n");
                 return 2;
             }
@@ -2313,6 +2326,10 @@ main(int argc, char **argv)
             machine_fpu_type = (int) v;
         } else if (!strcmp(argv[i], "--dbg486")) {
             machine_dbg486 = 1;
+        } else if (!strcmp(argv[i], "--rom")) {
+            harness_rom = 1;
+        } else if (!strcmp(argv[i], "--mca")) {
+            harness_mca = 1;
         } else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
             passes = atoi(argv[++i]);
             if (passes < 1 || passes > MAX_RUNS) {
@@ -2352,6 +2369,8 @@ main(int argc, char **argv)
     }
 
     setup_machine(softfloat, fast_fpu_env);
+    if (harness_rom)
+        harness_rom_setup();
     if (nolink)
         cpu_dyn_block_link = 0;
 

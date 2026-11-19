@@ -84,11 +84,13 @@ machine_get_internal_name(void)
 }
 
 /* The flat entry has no bus, so prefetch_run() keeps the ROM prefetch
-   multiply of every non-MCA machine. */
+   multiply of every non-MCA machine, unless --mca gives it an MCA bus. */
+int harness_mca;
+
 int
 machine_has_bus(int m, uintptr_t bus_flags)
 {
-    return machines[m].bus_flags & bus_flags;
+    return (machines[m].bus_flags | (harness_mca ? MACHINE_BUS_MCA : 0)) & bus_flags;
 }
 
 int

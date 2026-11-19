@@ -16,6 +16,7 @@ add_executable(cpu_harness
     harness.c
     harness_dbg.c
     harness_io.c
+    harness_tsc.c
     gen.c
     harness_pg.c
     stubs.c
