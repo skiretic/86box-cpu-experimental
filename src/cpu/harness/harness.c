@@ -1088,9 +1088,10 @@ capture(harness_state_t *s, int status)
     s->tos       = get32(HARNESS_RECORD + REC_TOS);
     s->tsc_delta = get32(HARNESS_RECORD + REC_TSC_DELTA) | ((uint64_t) get32(HARNESS_RECORD + REC_TSC_DELTA + 4) << 32);
     memcpy(s->data, ram + HARNESS_DATA, HARNESS_PAGE);
+    /* Before the stray pages are put back: the frame may be on one. */
+    harness_dbg_capture(&s->dbg, status);
     capture_stray_pages(s);
     capture_code_page(s);
-    harness_dbg_capture(&s->dbg, status);
 }
 
 /* The arm64 backend's blocks hold the guest's x87 and MMX registers in
