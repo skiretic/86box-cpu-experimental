@@ -31,7 +31,7 @@
 #define HARNESS_PORT_FLUSH_OTHER 0xf0
 
 typedef struct harness_pg_t {
-    uint32_t cr0_val; /* printed only: harness.c compares CR0 */
+    uint32_t cr0_val; /* printed with the rest; harness.c compares CR0 */
     uint32_t cr2_val;
     uint32_t cr3_val;
     uint32_t cr4_val;
@@ -49,7 +49,7 @@ extern void harness_pg_capture(harness_pg_t *p);
 extern int  harness_pg_differs(const harness_pg_t *a, const harness_pg_t *b);
 extern void harness_pg_compare(const harness_pg_t *a, const harness_pg_t *b,
                                void (*diff)(const char *field, uint64_t a, uint64_t b));
-extern void harness_pg_dump(const harness_pg_t *p);
+extern void harness_pg_state_line(const char *run_name, const harness_pg_t *p);
 extern void harness_flush_other(void);
 
 #endif /* CPU_HARNESS_PG_H */

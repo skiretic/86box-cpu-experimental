@@ -1255,7 +1255,6 @@ dump_state(const harness_state_t *s)
         printf("    stores outside the data page: %u page(s), first at %08x, hash %016" PRIx64 "\n", s->stray_pages, s->stray_first, s->stray_hash);
     if (s->code_bytes)
         printf("    stores to the code page: %u byte(s), first at %08x, hash %016" PRIx64 "\n", s->code_bytes, s->code_first, s->code_hash);
-    harness_pg_dump(&s->pg);
 }
 
 /* Same test as compare(), without the printing. */
@@ -1557,6 +1556,8 @@ run_case(const harness_case_t *c)
         }
         dump_case_hex(c);
     }
+    for (int r = 0; r < nruns; r++)
+        harness_pg_state_line(run_name[r], &st[r].pg);
     cur_case = NULL;
     return result | (no_body ? 16 : 0);
 }

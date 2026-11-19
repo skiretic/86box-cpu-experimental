@@ -10,10 +10,11 @@
  *          tables as a run leaves them, and a lookup flush from another
  *          thread.
  *
- *          --pg captures CR2, CR3 and CR4 at the halt (and prints CR0) and the record
+ *          --pg captures CR2, CR3 and CR4 at the halt and the record
  *          page's result block, compares them between the runs and
- *          prints them; --watch adds physical dwords (page-table entries)
- *          read before the stray-page check puts their pages back.
+ *          prints them, with CR0, as one RUNSTATE line per run; --watch
+ *          adds physical dwords (page-table entries) read before the
+ *          stray-page check puts their pages back.
  *          --lookups prints, to stderr after every run, the read and
  *          write lookup entries of the linear pages given: which physical
  *          page each one maps, or none. That is a path check only, never
@@ -30,6 +31,10 @@
 #include <86box/86box.h>
 #include "cpu.h"
 #include <86box/mem.h>
+#include "x86.h"
+#include "x86seg_common.h"
+#include "x86seg.h"
+#include "386_common.h"
 
 #include "harness.h"
 #include "harness_pg.h"
@@ -40,6 +45,22 @@ static uint32_t watch_addr[HARNESS_WATCH_MAX];
 static int      watch_nr;
 static uint32_t lookup_lin[HARNESS_WATCH_MAX];
 static int      lookup_nr;
+/* --flush-at: the site and the call of it, from 1, that flushes; the calls
+   of that site counted in the run so far. */
+static int      flush_site;
+static uint32_t flush_call;
+static uint32_t flush_count;
+
+#ifdef CPU_HAS_MEM_TEST_HOOK
+static void
+flush_at_hook(int site)
+{
+    if ((site == flush_site) && (++flush_count == flush_call)) {
+        harness_flush_other();
+        fprintf(stderr, "flush-at: site %d call %u flushed\n", site, flush_call);
+    }
+}
+#endif
 
 /* A comma separated list of hex addresses into out[], at most max. Returns
    the count, or -1. */
@@ -82,6 +103,23 @@ harness_pg_option(int argc, char **argv, int *i)
         harness_pg_on = 1;
         return 1;
     }
+    if (!strcmp(argv[*i], "--flush-at") && (*i + 1 < argc)) {
+        char *end;
+
+        flush_site = (int) strtol(argv[++*i], &end, 10);
+        if ((flush_site < 1) || (flush_site > 4) || (*end != ':')
+            || !(flush_call = (uint32_t) strtoul(end + 1, &end, 10)) || *end) {
+            fprintf(stderr, "--flush-at takes <site 1-4>:<call from 1>\n");
+            return -1;
+        }
+#ifdef CPU_HAS_MEM_TEST_HOOK
+        mem_test_hook = flush_at_hook;
+        return 1;
+#else
+        fprintf(stderr, "--flush-at needs a harness built with scripts/harness-flush-hook.diff\n");
+        return -1;
+#endif
+    }
     if (!strcmp(argv[*i], "--lookups") && (*i + 1 < argc)) {
         lookup_nr = parse_addr_list(argv[++*i], lookup_lin, HARNESS_WATCH_MAX);
         if (lookup_nr <= 0) {
@@ -102,7 +140,11 @@ harness_pg_usage(void)
             "  --watch <a>[,<b>...] (implies --pg) also the dwords at these physical addresses (hex,\n"
             "                       up to %d): page-table entries as the run left them\n"
             "  --lookups <a>[,...]  after every run, to stderr: the read and write lookup entries of\n"
-            "                       these linear pages (hex, up to %d); never compared\n",
+            "                       these linear pages (hex, up to %d); never compared\n"
+            "  --flush-at <s>:<n>   the n-th call in a run of the flush hook at site s (1 checkio() word\n"
+            "                       read, 2 its byte read, 3 a string op's source, 4 its destination)\n"
+            "                       flushes the lookup tables from another thread; needs a build with\n"
+            "                       scripts/harness-flush-hook.diff\n",
             HARNESS_RECORD + REC_RES, HARNESS_WATCH_MAX, HARNESS_WATCH_MAX);
 }
 
@@ -129,6 +171,8 @@ print_lookup(const char *name, uintptr_t e, uint32_t lin)
 void
 harness_pg_capture(harness_pg_t *p)
 {
+    /* The next run counts its hook calls from its start. */
+    flush_count = 0;
     memset(p, 0, sizeof(*p));
     if (harness_pg_on) {
         p->cr0_val = cr0;
@@ -186,20 +230,39 @@ harness_pg_compare(const harness_pg_t *a, const harness_pg_t *b, void (*diff)(co
     }
 }
 
-void
-harness_pg_dump(const harness_pg_t *p)
+/* The run's name as one token, as the kit's expectations name runs:
+   "interpreter" interp, "mark pass" mark, "compile pass" compile, "compile
+   pass N" compileN, "compiled" compiled, "compiled 2" compiled2. */
+static void
+run_token(const char *name, char *tok, size_t size)
 {
+    if (!strcmp(name, "interpreter"))
+        snprintf(tok, size, "interp");
+    else if (!strcmp(name, "mark pass"))
+        snprintf(tok, size, "mark");
+    else if (!strncmp(name, "compile pass", 12))
+        snprintf(tok, size, "compile%s", name[12] ? name + 13 : "");
+    else if (!strcmp(name, "compiled 2"))
+        snprintf(tok, size, "compiled2");
+    else
+        snprintf(tok, size, "%s", name);
+}
+
+/* --pg: one line per run, "RUNSTATE <run> <field>=<hex> ...". */
+void
+harness_pg_state_line(const char *run_name, const harness_pg_t *p)
+{
+    char tok[24];
+
     if (!harness_pg_on)
         return;
-    printf("    CR0=%08x CR2=%08x CR3=%08x CR4=%08x\n", p->cr0_val, p->cr2_val, p->cr3_val, p->cr4_val);
+    run_token(run_name, tok, sizeof(tok));
+    printf("RUNSTATE %s cr0=%08x cr2=%08x cr3=%08x cr4=%08x", tok, p->cr0_val, p->cr2_val, p->cr3_val, p->cr4_val);
     for (int i = 0; i < HARNESS_RES_NR; i++)
-        printf("%sRES%d=%08x%s", (i & 7) ? " " : "    ", i, p->res[i], ((i & 7) == 7) ? "\n" : "");
-    if (watch_nr) {
-        printf("   ");
-        for (int i = 0; i < watch_nr; i++)
-            printf(" W%08x=%08x", watch_addr[i], p->watch[i]);
-        printf("\n");
-    }
+        printf(" res%d=%08x", i, p->res[i]);
+    for (int i = 0; i < watch_nr; i++)
+        printf(" w%08x=%08x", watch_addr[i], p->watch[i]);
+    printf("\n");
 }
 
 /* The flush a device thread makes: is_cpu_thread is clear on that thread,
