@@ -54,7 +54,7 @@ harness_dbg_usage(void)
 {
     fprintf(stderr,
             "  --dbg-state          also compare DR0-DR3, DR6, DR7, CR2, CR4, the pending trap, the\n"
-            "                       four dwords at SS:ESP and the port device counts, and dump them\n"
+            "                       six dwords at SS:ESP and the port device counts, and dump them\n"
             "  --state-lines        --dbg-state, and one RUNSTATE line per run (not with --quiet)\n");
 }
 
@@ -93,7 +93,7 @@ harness_dbg_capture(harness_dbg_state_t *s, int status)
     s->cr2  = cr2;
     s->cr4  = cr4;
     s->trap = trap;
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 6; i++)
         s->frame[i] = ram32(sp + i * 4);
     s->port_reads  = harness_port_reads;
     s->port_writes = harness_port_writes;
@@ -140,7 +140,7 @@ harness_dbg_compare(const harness_dbg_state_t *a, const harness_dbg_state_t *b,
         diff("trap", a->trap, b->trap);
         n++;
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         if (a->frame[i] == b->frame[i])
             continue;
         snprintf(name, sizeof(name), "frame%d", i);
@@ -183,8 +183,9 @@ harness_dbg_dump(const harness_dbg_state_t *s)
         return;
     printf("    DR0=%08x DR1=%08x DR2=%08x DR3=%08x DR6=%08x DR7=%08x CR2=%08x CR4=%08x\n",
            s->dr[0], s->dr[1], s->dr[2], s->dr[3], s->dr[6], s->dr[7], s->cr2, s->cr4);
-    printf("    EFLAGS=%08x trap=%x frame=%08x %08x %08x %08x port.reads=%u port.writes=%u flush.reads=%u\n",
-           s->eflags, s->trap, s->frame[0], s->frame[1], s->frame[2], s->frame[3], s->port_reads, s->port_writes, s->flush_reads);
+    printf("    EFLAGS=%08x trap=%x frame=%08x %08x %08x %08x %08x %08x port.reads=%u port.writes=%u flush.reads=%u\n",
+           s->eflags, s->trap, s->frame[0], s->frame[1], s->frame[2], s->frame[3], s->frame[4], s->frame[5],
+           s->port_reads, s->port_writes, s->flush_reads);
 }
 
 /* The run's name as one token: "interpreter" interp, "mark pass" mark,
@@ -223,7 +224,7 @@ harness_dbg_state_line(const char *run_name, uint32_t body, const harness_dbg_st
     for (int i = 0; i < 4; i++)
         printf(" dr%d=%08x", i, s->dr[i]);
     printf(" dr6=%08x dr7=%08x trap=%08x", s->dr[6], s->dr[7], s->trap);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 6; i++)
         printf(" frame%d=%08x", i, s->frame[i]);
     printf(" preads=%08x pwrites=%08x freads=%08x tsc=%" PRIu64 " d100=%08x", s->port_reads, s->port_writes, s->flush_reads, s->tsc, s->d100);
     for (int i = 0; i < HARNESS_LOG_WORDS; i++)

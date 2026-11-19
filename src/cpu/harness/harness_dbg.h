@@ -31,7 +31,7 @@ typedef struct harness_dbg_state_t {
     uint32_t cr2;
     uint32_t cr4;
     uint32_t trap;
-    uint32_t frame[4];   /* the dwords at SS:ESP at the halt */
+    uint32_t frame[6];   /* the dwords at SS:ESP at the halt */
     uint32_t port_reads;
     uint32_t port_writes;
     uint32_t flush_reads;
