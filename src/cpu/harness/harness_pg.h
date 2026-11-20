@@ -32,6 +32,16 @@
    no hand case reads port 0xf0 without meaning it. */
 #define HARNESS_PORT_FLUSH_OTHER 0xf0
 
+/* --dev: a device window of four pages on the external bus at this physical
+   address. Every write to it is logged in order (its size, offset and
+   value) into a count and a hash, which are compared between the runs; a
+   read returns the count so far. */
+#define HARNESS_DEV      0xfe000000
+#define HARNESS_DEV_SIZE 0x4000
+/* A write to this offset of the window also raises SMI#, as a device that
+   traps an access does. */
+#define HARNESS_DEV_SMI 0x3f00
+
 typedef struct harness_pg_t {
     uint32_t cr0_val; /* printed with the rest; harness.c compares CR0 */
     uint32_t cr2_val;
@@ -39,11 +49,22 @@ typedef struct harness_pg_t {
     uint32_t cr4_val;
     uint32_t res[HARNESS_RES_NR];
     uint32_t watch[HARNESS_WATCH_MAX];
+    uint32_t dev_n;    /* --dev: the writes the device took */
+    uint32_t dev_last; /* the offset and size of the last one, (offset << 4) | size */
+    uint64_t dev_hash; /* over every write in order */
 } harness_pg_t;
 
 /* --pg: the fields above are captured, compared and printed. Without it
    they stay zero and nothing is printed. */
 extern int harness_pg_on;
+extern int harness_dev_on;
+/* --dev-norun / --dev-run-max: whether the window takes runs of dword
+   writes in one call, and at most how many per call. */
+extern int      harness_dev_run;
+extern uint32_t harness_dev_run_max;
+
+extern void harness_dev_setup(void);
+extern void harness_dev_reset(void);
 
 extern int  harness_pg_option(int argc, char **argv, int *i);
 extern void harness_pg_usage(void);

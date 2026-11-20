@@ -863,6 +863,7 @@ load_case(const harness_case_t *c, int with_code)
     }
     put32(HARNESS_RECORD + REC_VECTOR, 0xffffffff);
     harness_ram_writer_addr = 0;
+    harness_dev_reset();
 
     cpu_state.abrt = 0;
     cpu_halted     = 0;
@@ -2371,6 +2372,8 @@ main(int argc, char **argv)
     setup_machine(softfloat, fast_fpu_env);
     if (harness_rom)
         harness_rom_setup();
+    if (harness_dev_on)
+        harness_dev_setup();
     if (nolink)
         cpu_dyn_block_link = 0;
 

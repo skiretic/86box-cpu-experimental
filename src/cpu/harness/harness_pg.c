@@ -31,6 +31,7 @@
 #include <86box/86box.h>
 #include "cpu.h"
 #include <86box/mem.h>
+#include <86box/plat_unused.h>
 #include "x86.h"
 #include "x86seg_common.h"
 #include "x86seg.h"
@@ -39,7 +40,110 @@
 #include "harness.h"
 #include "harness_pg.h"
 
-int harness_pg_on = 0;
+int      harness_pg_on       = 0;
+int      harness_dev_on      = 0;
+int      harness_dev_run     = 1;
+uint32_t harness_dev_run_max = 0xffffffff;
+
+static mem_mapping_t dev_mapping;
+static uint32_t      dev_n;
+static uint32_t      dev_last;
+static uint64_t      dev_hash;
+
+/* FNV-1a over the write's size, offset and value. */
+static void
+dev_log(uint32_t addr, uint32_t size, uint32_t val)
+{
+    const uint32_t w[3] = { size, addr - HARNESS_DEV, val };
+
+    if (dev_n == 0)
+        dev_hash = 0xcbf29ce484222325ULL;
+    for (int i = 0; i < 3; i++) {
+        for (int b = 0; b < 4; b++) {
+            dev_hash ^= (w[i] >> (b * 8)) & 0xff;
+            dev_hash *= 0x100000001b3ULL;
+        }
+    }
+    dev_n++;
+    dev_last = ((addr - HARNESS_DEV) << 4) | size;
+    if ((addr - HARNESS_DEV) == HARNESS_DEV_SMI)
+        harness_smi();
+}
+
+static uint8_t
+dev_read_b(UNUSED(uint32_t addr), UNUSED(void *priv))
+{
+    return (uint8_t) dev_n;
+}
+
+static uint16_t
+dev_read_w(UNUSED(uint32_t addr), UNUSED(void *priv))
+{
+    return (uint16_t) dev_n;
+}
+
+static uint32_t
+dev_read_l(UNUSED(uint32_t addr), UNUSED(void *priv))
+{
+    return dev_n;
+}
+
+static void
+dev_write_b(uint32_t addr, uint8_t val, UNUSED(void *priv))
+{
+    dev_log(addr, 1, val);
+}
+
+static void
+dev_write_w(uint32_t addr, uint16_t val, UNUSED(void *priv))
+{
+    dev_log(addr, 2, val);
+}
+
+static void
+dev_write_l(uint32_t addr, uint32_t val, UNUSED(void *priv))
+{
+    dev_log(addr, 4, val);
+}
+
+/* Runs of dword writes in one call, on the first three pages only (the
+   page with the SMI# offset takes none), at most --dev-run-max per call:
+   logged as the single writes are. Counted for --verbose. */
+static uint32_t dev_run_calls;
+static uint32_t dev_run_writes;
+
+static uint32_t
+dev_write_l_run(uint32_t addr, const uint32_t *src, uint32_t n, UNUSED(void *priv))
+{
+    if (((addr - HARNESS_DEV) + (n << 2)) > 0x3000)
+        return 0;
+    if (n > harness_dev_run_max)
+        n = harness_dev_run_max;
+    for (uint32_t i = 0; i < n; i++)
+        dev_log(addr + (i << 2), 4, src[i]);
+    dev_run_calls++;
+    dev_run_writes += n;
+    return n;
+}
+
+/* Once per process, after the machine's setup, as harness_rom_setup(). */
+void
+harness_dev_setup(void)
+{
+    mem_mapping_add(&dev_mapping, HARNESS_DEV, HARNESS_DEV_SIZE, dev_read_b, dev_read_w, dev_read_l,
+                    dev_write_b, dev_write_w, dev_write_l, NULL, MEM_MAPPING_EXTERNAL, NULL);
+    if (harness_dev_run)
+        mem_mapping_set_write_l_run(&dev_mapping, dev_write_l_run);
+}
+
+/* Every run starts with an empty log (load_case()). */
+void
+harness_dev_reset(void)
+{
+    dev_n    = 0;
+    dev_last = 0;
+    dev_hash = 0;
+}
 
 static uint32_t watch_addr[HARNESS_WATCH_MAX];
 static int      watch_nr;
@@ -94,6 +198,23 @@ harness_pg_option(int argc, char **argv, int *i)
         harness_pg_on = 1;
         return 1;
     }
+    if (!strcmp(argv[*i], "--dev")) {
+        harness_dev_on = 1;
+        harness_pg_on  = 1;
+        return 1;
+    }
+    if (!strcmp(argv[*i], "--dev-norun")) {
+        harness_dev_run = 0;
+        return 1;
+    }
+    if (!strcmp(argv[*i], "--dev-run-max") && (*i + 1 < argc)) {
+        harness_dev_run_max = (uint32_t) strtoul(argv[++*i], NULL, 0);
+        if (!harness_dev_run_max) {
+            fprintf(stderr, "--dev-run-max takes a count from 1\n");
+            return -1;
+        }
+        return 1;
+    }
     if (!strcmp(argv[*i], "--watch") && (*i + 1 < argc)) {
         watch_nr = parse_addr_list(argv[++*i], watch_addr, HARNESS_WATCH_MAX);
         if (watch_nr <= 0) {
@@ -140,13 +261,19 @@ harness_pg_usage(void)
             "                       lines, which --quiet leaves out for a case whose runs all agree\n"
             "  --watch <a>[,<b>...] (implies --pg) also the dwords at these physical addresses (hex,\n"
             "                       up to %d): page-table entries as the run left them\n"
+            "  --dev                (implies --pg) a device window at %08x, %x bytes, on the external\n"
+            "                       bus: its writes are logged in order, counted and hashed, compared\n"
+            "                       and printed; a read returns the count; a write to offset %x\n"
+            "                       raises SMI#\n"
+            "  --dev-norun          the device window takes no runs of dword writes in one call\n"
+            "  --dev-run-max <n>    the device window takes at most n dwords per run call\n"
             "  --lookups <a>[,...]  after every run, to stderr: the read and write lookup entries of\n"
             "                       these linear pages (hex, up to %d); never compared\n"
             "  --flush-at <s>:<n>   the n-th call in a run of the flush hook at site s (1 checkio() word\n"
             "                       read, 2 its byte read, 3 a string op's source, 4 its destination)\n"
             "                       flushes the lookup tables from another thread; needs a build with\n"
             "                       scripts/harness-flush-hook.diff\n",
-            HARNESS_RECORD + REC_RES, HARNESS_WATCH_MAX, HARNESS_WATCH_MAX);
+            HARNESS_RECORD + REC_RES, HARNESS_WATCH_MAX, HARNESS_DEV, HARNESS_DEV_SIZE, HARNESS_DEV_SMI, HARNESS_WATCH_MAX);
 }
 
 static uint32_t
@@ -184,6 +311,13 @@ harness_pg_capture(harness_pg_t *p)
             p->res[i] = phys_dword(HARNESS_RECORD + REC_RES + i * 4);
         for (int i = 0; i < watch_nr; i++)
             p->watch[i] = phys_dword(watch_addr[i]);
+        p->dev_n    = dev_n;
+        p->dev_last = dev_last;
+        p->dev_hash = dev_hash;
+        if (harness_dev_on && harness_verbose)
+            fprintf(stderr, "dev: %u run calls, %u writes in them\n", dev_run_calls, dev_run_writes);
+        dev_run_calls  = 0;
+        dev_run_writes = 0;
     }
     if (lookup_nr) {
         fprintf(stderr, "lookups:");
@@ -229,6 +363,12 @@ harness_pg_compare(const harness_pg_t *a, const harness_pg_t *b, void (*diff)(co
             diff(name, a->watch[i], b->watch[i]);
         }
     }
+    if (a->dev_n != b->dev_n)
+        diff("dev.n", a->dev_n, b->dev_n);
+    if (a->dev_last != b->dev_last)
+        diff("dev.last", a->dev_last, b->dev_last);
+    if (a->dev_hash != b->dev_hash)
+        diff("dev.hash", a->dev_hash, b->dev_hash);
 }
 
 /* The run's name as one token, as the kit's expectations name runs:
@@ -263,6 +403,8 @@ harness_pg_state_line(const char *run_name, const harness_pg_t *p)
         printf(" res%d=%08x", i, p->res[i]);
     for (int i = 0; i < watch_nr; i++)
         printf(" w%08x=%08x", watch_addr[i], p->watch[i]);
+    if (harness_dev_on)
+        printf(" dev_n=%08x dev_last=%08x dev_hash=%016" PRIx64, p->dev_n, p->dev_last, p->dev_hash);
     printf("\n");
 }
 
