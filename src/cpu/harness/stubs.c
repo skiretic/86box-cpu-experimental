@@ -94,6 +94,12 @@ machine_has_bus(int m, uintptr_t bus_flags)
 }
 
 int
+machine_has_flags(int m, uintptr_t flags)
+{
+    return !!(machines[m].flags & flags);
+}
+
+int
 debugger_instruction(int partial)
 {
     (void) partial;
