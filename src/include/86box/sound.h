@@ -297,6 +297,9 @@ extern const device_t sb_awe64_value_device;
 extern const device_t sb_awe64_device;
 extern const device_t sb_awe64_ide_device;
 extern const device_t sb_awe64_gold_device;
+extern const device_t emu8008_ct4600_device;
+extern const device_t emu8008_ct4650_device;
+extern const device_t emu8008_ct4655_device;
 
 /* Crystal CS423x */
 extern const device_t cs4232_device;
@@ -334,6 +337,9 @@ extern const device_t ess_solo1_onboard_device;
 
 /* Ensoniq AudioPCI */
 extern const device_t es1370_device;
+/* Aureal Vortex 2 */
+extern const device_t vortex2_device;
+
 extern const device_t es1371_device;
 extern const device_t es1371_onboard_device;
 extern const device_t es1373_device;

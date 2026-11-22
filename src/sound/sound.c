@@ -262,11 +262,15 @@ static const SOUND_CARD sound_cards[] = {
     { &ess_soundpiper_16_mca_device },
     { &ess_soundpiper_32_mca_device },
     /* PCI */
+    { &vortex2_device               },
     { &cmi8338_device               },
     { &cmi8738_device               },
     { &es1370_device                },
     { &es1371_device                },
     { &ess_solo1_device             },
+    { &emu8008_ct4600_device        },
+    { &emu8008_ct4650_device        },
+    { &emu8008_ct4655_device        },
     { &es1373_device                },
     { &ct5880_device                },
     /* AC97 */
