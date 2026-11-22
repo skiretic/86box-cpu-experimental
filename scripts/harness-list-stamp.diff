@@ -1,0 +1,25 @@
+cpu_harness only: the block list stamp started near its wrap (#828 round g).
+
+Applied to a harness build tree only, never to an 86Box build and never
+committed under src/, as scripts/harness-flush-hook.diff is. codegen_reset()
+starts the list stamp of the flush's chunk-list merge (codegen_block.c) 200
+listings before the uint64_t wrap instead of at 0, so every harness run
+crosses the wrap early: the merge must keep the page lists' order across it
+(the renumbering at UINT64_MAX), and every output must be the plain build's.
+The hand case wrap (96 blocks over three chunks of one page, rewritten
+together) differs from the plain build on a merge that does not.
+
+Apply from the top of the tree: git apply scripts/harness-list-stamp.diff
+
+diff --git a/src/codegen/codegen_block.c b/src/codegen/codegen_block.c
+--- a/src/codegen/codegen_block.c
++++ b/src/codegen/codegen_block.c
+@@ -792,7 +792,7 @@
+     mem_reset_page_blocks();
+     block_chunk_lists_nr   = 0;
+     block_chunk_lists_free = 0;
+-    block_list_stamp       = 0;
++    block_list_stamp       = UINT64_MAX - 200;
+ 
+     block_free_list = 0;
+     for (c = 0; c < BLOCK_SIZE; c++) {

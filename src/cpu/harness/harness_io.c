@@ -21,6 +21,7 @@
  *            EFh      the remapping device: a read flushes the lookups
  *            F0h      the same flush from another thread (harness_pg.h)
  *            500h-507h the counting device (harness_dbg.h)
+ *            508h     the mask remapping device (below)
  *          and every other port reads as open bus and drops writes.
  */
 #include <stdint.h>
@@ -42,6 +43,53 @@
    word or dword to 0xe4 writes it there with mem_write{b,w,l}_phys(); a dword
    to 0xe8 writes it there with mem_write_phys_block(). */
 uint32_t harness_ram_writer_addr;
+
+/* A device that moves a page onto the dirty and code-present byte arrays of
+   another page, as a chipset's RAM remap or alias does.
+   A dword to 508h gives the page number in bits 0-15 and the target in
+   bits 16-30. The target supplies the byte arrays. An out-of-range page
+   or target is ignored. A case puts back each page's own arrays before
+   it halts.
+
+   With bit 31 set, page 9 also fetches instructions from the target RAM
+   page. Moving it back removes the fetch overlay. */
+#define HARNESS_PORT_MASK_REMAP 0x0508
+#define HARNESS_REMAP_EXEC      0x80000000u
+#define HARNESS_REMAP_PAGE      9
+
+static mem_mapping_t harness_remap_exec;
+
+static void
+harness_mask_remap(uint32_t val)
+{
+    const uint32_t page   = val & 0xffff;
+    const uint32_t target = (val & ~HARNESS_REMAP_EXEC) >> 16;
+
+    if ((page >= pages_sz) || (((uint64_t) (target + 1) << 12) > ((uint64_t) mem_size << 10)))
+        return;
+    if ((val & HARNESS_REMAP_EXEC) && (page != HARNESS_REMAP_PAGE))
+        return;
+    mem_set_page_byte_masks(&pages[page], target);
+    if (val & HARNESS_REMAP_EXEC) {
+        uint8_t *exec = &ram[target << 12];
+
+        if (target == page) {
+            if (!harness_remap_exec.enable)
+                return;
+            mem_mapping_disable(&harness_remap_exec);
+        } else if (!harness_remap_exec.size) {
+            mem_mapping_add(&harness_remap_exec, page << 12, 0x1000, NULL, NULL, NULL,
+                            NULL, NULL, NULL, exec, MEM_MAPPING_INTERNAL, NULL);
+        } else {
+            if (harness_remap_exec.enable && (harness_remap_exec.exec == exec))
+                return;
+            mem_mapping_set_exec(&harness_remap_exec, exec);
+            if (!harness_remap_exec.enable)
+                mem_mapping_enable(&harness_remap_exec);
+        }
+        flushmmucache_pc();
+    }
+}
 
 static int
 is_count_port(uint16_t port)
@@ -120,6 +168,8 @@ harness_outl(uint16_t port, uint32_t val, void *priv)
         mem_writel_phys(harness_ram_writer_addr, val);
     else if (port == 0xe8)
         mem_write_phys_block(&val, harness_ram_writer_addr, 4);
+    else if (port == HARNESS_PORT_MASK_REMAP)
+        harness_mask_remap(val);
     else if (is_count_port(port))
         harness_port_writes++;
 }
