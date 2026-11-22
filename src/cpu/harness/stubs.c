@@ -331,6 +331,13 @@ agpgart_cpu_entry(const mem_mapping_t *map, uint32_t addr, _Atomic uint32_t **ge
     return NULL;
 }
 
+int
+agpgart_is_aperture(const mem_mapping_t *map)
+{
+    (void) map;
+    return 0;
+}
+
 void *
 plat_mmap(size_t size, uint8_t executable, uint8_t *large)
 {
