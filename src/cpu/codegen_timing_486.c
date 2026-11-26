@@ -19,7 +19,8 @@
 #define CYCLES2(c16, c32) (int *) ((-1 & ~0xffff) | c16 | (c32 << 8))
 
 /*The prefix bytes' entries are what codegen_timing_486_prefix() charges.
-  ES:, CS: and FS: take 1 clock (Intel486 DX data book, Oct 1992, p157).*/
+  ES:, CS: and FS: take 1 clock (Intel486 DX data book, Oct 1992, p157).
+  The operand size prefix takes 1 clock (same page).*/
 static int *opcode_timings_486[256] = {
     // clang-format off
 /*00*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      CYCLES(3),      &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      NULL,
@@ -29,7 +30,7 @@ static int *opcode_timings_486[256] = {
 
 /*40*/  &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,
 /*50*/  CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),
-/*60*/  CYCLES(11),     CYCLES(9),      CYCLES(7),      CYCLES(9),      CYCLES(1),      CYCLES(4),      CYCLES(2),      CYCLES(2),      CYCLES(1),      CYCLES2(17,25), CYCLES(1),      CYCLES2(17,20), CYCLES(17),     CYCLES(17),     CYCLES(17),     CYCLES(17),
+/*60*/  CYCLES(11),     CYCLES(9),      CYCLES(7),      CYCLES(9),      CYCLES(1),      CYCLES(4),      CYCLES(1),      CYCLES(2),      CYCLES(1),      CYCLES2(17,25), CYCLES(1),      CYCLES2(17,20), CYCLES(17),     CYCLES(17),     CYCLES(17),     CYCLES(17),
 /*70*/  &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,    &timing_bnt,
 
 /*80*/  &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     CYCLES(5),      CYCLES(5),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(3),      CYCLES(1),      CYCLES(5),      CYCLES(6),
