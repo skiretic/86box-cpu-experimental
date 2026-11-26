@@ -91,10 +91,20 @@
  *          recompiler ends them, as for model. wire_c / wire_i: that stream
  *          as a hand case, compiled (the "compiled" run, which must equal
  *          "compiled 2") and interpreted (run 0); the TSC deltas,
- *          differenced the same way. wire is the flag of the model against
- *          what is charged: "=" when wire_c equals ctx plus the charges
- *          outside the model (off_model()) and the model's own figure plus
- *          them does too; "=ctx" when wire_c equals ctx's but the model's
+ *          differenced the same way. A single row's ctx and wire time its
+ *          instance alone instead of copies: the last instruction of its
+ *          block, separators ahead of and after it, the run with it minus
+ *          the run without it (single_stream()); also in a second frame
+ *          of other separators, the two counted (COUNT FRAME-SAME,
+ *          FRAME-DIFF). On an in-order model a ctx other than the isolated
+ *          block's figure (model) is the frame's: NOT-MEASURED, delta
+ *          alone-not-isolated-block(...), as are an instance that does not
+ *          end its block, one whose opcode lies past its bytes (a lone 0F)
+ *          and a single row of an out-of-order model (P6, K6), which no
+ *          separator isolates, where a run was made. wire is the flag of
+ *          the model against what is charged: "=" when wire_c equals ctx
+ *          plus the charges outside the model (off_model()) and the
+ *          model's own figure plus them does too; "=ctx" when wire_c equals ctx's but the model's
  *          does not (COUNT WIRE-MODEL-CTX); GAP when wire_c does not equal
  *          ctx's: the compiled path charging what the meter does not follow.
  *          A
@@ -591,6 +601,26 @@ past_fwait(const ins_t *in, ins_t *out)
     memcpy(out->b, in->b + i, out->len);
 }
 
+/* 0 when an instance's last instruction has its opcode past the
+   instance's bytes (a lone 0F): it would take the next instance's. */
+static int
+whole_insns(const ins_t *unit, int nunit)
+{
+    walk_t w;
+    int    ok = 1;
+
+    for (int i = 0; ok && (i < nunit); i++) {
+        place(unit[i].b, unit[i].len);
+        for (uint32_t a = HARNESS_CODE, end = HARNESS_CODE + unit[i].len; ok && (a < end);) {
+            walk(a, 0, &w);
+            ok = (w.op_pc <= end);
+            a  = insn_end(&w, end);
+        }
+        unplace();
+    }
+    return ok;
+}
+
 /* The instructions in a unit of instances. */
 static int
 count_insns(const ins_t *unit, int nunit)
@@ -684,6 +714,10 @@ mmx_op(uint8_t op)
    drives left an instruction to a POP SS's or MOV SS's op. */
 static int drive_real;
 static int drive_skipped;
+/* drive_mark: a stream index, or -1; drive_mark_last: its instance ended
+   its block (nothing after it shared the block). */
+static int drive_mark = -1;
+static int drive_mark_last;
 
 /* What the compile pass leaves that decides where an op ends its block:
    the x87 TOP as the x87 ops move it, and whether MMX mode is on. A case
@@ -1057,6 +1091,8 @@ drive(const ins_t *const *stream, int nstream, int taken, int ctx, int64_t *tota
                 pend  = 0;
             }
         }
+        if (i == drive_mark)
+            drive_mark_last = ((in_bl == 0) || (in_bl == MAX_INSTRUCTION_COUNT)) && !skip;
     }
     if (!ctx)
         codegen_timing_block_end();
@@ -2456,6 +2492,8 @@ static int         gap_count;
 static int         model_ctx_count; /* wire "=ctx" */
 static int         norun_count;
 static int         wire_run_count;
+static int         frame_same_count; /* single rows: both frames give the same charge */
+static int         frame_diff_count;
 
 static int
 scored(int v)
@@ -2792,6 +2830,7 @@ typedef struct meas_t {
     int     cond_branch;
     char    why[24];
     char    mwhy[16]; /* why there is no model figure ("fatal" when empty) */
+    int     alone;    /* single_stream(): the timed instance ended its block in ctx's run */
 } meas_t;
 
 static int
@@ -2811,6 +2850,118 @@ build(const ins_t *const *pre, int npre, const ins_t *unit, int nunit, int copie
         for (int i = 0; i < nunit; i++)
             stream[n++] = &unit[i];
     }
+    if (ctx) {
+        for (int i = 0; i < nframe_time; i++)
+            stream[n++] = &frame_epi[i];
+    }
+    return n;
+}
+
+/* A single row's instance timed alone, as the model's isolated block times
+   it: the last instruction of its block, which the recompiler ends at its
+   instruction limit, so nothing after it shares its block; a pairable
+   instruction held for a partner (Pentium U, 6x86 X/Y) is charged at that
+   block end, its prefix delay included, as in the isolated block. Copies
+   of the instance (single_warm()) come first in both runs and leave the
+   state the copies ahead of a timed one leave for the other rows (a page's
+   first access, the stack and EBP a LEAVE moves), with no separator next
+   to them. Separators fill the rest of the block (ahead: measure() picks
+   the count that puts the instance on the limit when a copy ends a block,
+   an MMX op entering MMX mode; drive() reports in meas_t alone whether it
+   ended its block). The two nearest it are FWAITs: not pairable on the
+   Pentium or the 6x86, writing no register and reading no address
+   register, so the instance pairs with neither and no AGI reaches it (the
+   6x86 looks two instructions back), and on the Pentium 1 clock, which
+   leaves no decode time to shadow its prefixes. On the WinChip 2 they are
+   NOPs: its FWAIT takes 4 clocks and would shadow the instance's prefix and
+   escape decode clocks; its NOP takes 1, writes no register and does not
+   pair (only MMX instructions pair there). After the instance, two
+   separators and one per instruction of the instance start the next block,
+   ahead of the epilogue. The run without the instance has one separator
+   per instruction of the instance in its place, so both runs end their
+   first block at the same instruction and their second block holds the
+   same epilogue; a separator's charge does not depend on what is before it
+   (the in-order models), so the extra ones charge the same in either
+   block. Frame 0 fills the block with FWAITs, frame 1 with CLDs up to the
+   two nearest separators, and on the 486 model (no pairing, an AGI one
+   instruction back) CLDs next to and after the instance too: the two
+   frames' figures are counted (COUNT FRAME-SAME, FRAME-DIFF), and on the
+   in-order models a figure other than the isolated block's (model) is not
+   measured (meter_row()). The out-of-order models (P6, K6) charge an
+   instance the step of an in-order completion time over what is in flight
+   around it: no separator isolates it, only an empty block: their single
+   rows are scored from it where no run was made, else not measured (the
+   copies' figures shown). Returns the stream length, or -1 for fewer than
+   two separators ahead. */
+static const ins_t sep_fwait = { { 0x9b }, 1 };
+static const ins_t sep_cld   = { { 0xfc }, 1 };
+static const ins_t sep_nop   = { { 0x90 }, 1 };
+
+#define SEP_AFTER   2
+
+static int single_at; /* the stream index of the timed instance's last instance */
+
+/* The copies ahead: 2, or none for x87 instructions on the models that
+   carry an x87 result latency from one instruction to the next (the
+   Pentium's, the WinChip 2's), which the separators do not wait out and
+   the isolated block does not have; their memory operands are on the
+   data page the warm-up fills. */
+static int
+single_warm(const ins_t *unit, int nunit)
+{
+    int op;
+    int modrm;
+    int at;
+    int pfx;
+
+    if (strcmp(model_name, "pentium") && strcmp(model_name, "winchip2"))
+        return 2;
+    for (int i = 0; i < nunit; i++) {
+        if (!x87_decode(&unit[i], &op, &modrm, &at, &pfx))
+            return 0;
+    }
+    return 2;
+}
+
+/* The separators ahead that fill the first block when no copy ends a
+   block early. */
+static int
+single_ahead_max(const ins_t *unit, int nunit)
+{
+    return MAX_INSTRUCTION_COUNT - nframe_pre - NWARM - (single_warm(unit, nunit) + 1) * count_insns(unit, nunit);
+}
+
+static int
+single_stream(const ins_t *unit, int nunit, int ahead, int with, int frame, int ctx, const ins_t **stream)
+{
+    const ins_t *near = !strcmp(model_name, "winchip2") ? &sep_nop : (frame && !strcmp(model_name, "486")) ? &sep_cld : &sep_fwait;
+    const int    ni   = count_insns(unit, nunit);
+    int          n    = 0;
+
+    if (ahead < 2)
+        return -1;
+    if (ctx) {
+        for (int i = 0; i < nframe_pre; i++)
+            stream[n++] = &frame_pre[i];
+    }
+    for (int i = 0; i < NWARM; i++)
+        stream[n++] = &warm[i];
+    for (int c = single_warm(unit, nunit); c > 0; c--) {
+        for (int i = 0; i < nunit; i++)
+            stream[n++] = &unit[i];
+    }
+    for (int i = 0; i < ahead; i++)
+        stream[n++] = (frame && (i < ahead - 2)) ? &sep_cld : near;
+    if (with) {
+        for (int i = 0; i < nunit; i++)
+            stream[n++] = &unit[i];
+        single_at = n - 1;
+    } else {
+        for (int i = 0; i < ni; i++)
+            stream[n++] = near;
+    }
+    for (int i = 0; i < SEP_AFTER + (with ? ni : 0); i++)
+        stream[n++] = near;
     if (ctx) {
         for (int i = 0; i < nframe_time; i++)
             stream[n++] = &frame_epi[i];
@@ -3367,29 +3518,40 @@ x87_setup(const ins_t *unit, int nunit, int copies, const char *cond, meter_x87_
     return 1;
 }
 
+/* The end-to-end run of a body of instances. */
 static int
-wire_body(const ins_t *unit, int nunit, int copies, uint32_t ecx, uint32_t eflags, const meter_x87_t *x87,
-          const meter_seed_t *seeds, int nseeds, uint64_t mm0, meter_wire_t *w)
+wire_insts(const ins_t *const *s, int ns, uint32_t ecx, uint32_t eflags, const meter_x87_t *x87, const meter_seed_t *seeds,
+           int nseeds, uint64_t mm0, meter_wire_t *w)
 {
     static uint8_t buf[BUF_MAX];
     int            len = 0;
 
-    for (int i = 0; i < NWARM; i++) {
-        memcpy(buf + len, warm[i].b, warm[i].len);
-        len += warm[i].len;
-    }
-    for (int c = 0; c < copies; c++) {
-        for (int i = 0; i < nunit; i++) {
-            if (len + unit[i].len > HARNESS_BODY_MAX) {
-                snprintf(w->why, sizeof(w->why), "toolong");
-                return -1;
-            }
-            memcpy(buf + len, unit[i].b, unit[i].len);
-            len += unit[i].len;
+    for (int i = 0; i < ns; i++) {
+        if (len + s[i]->len > HARNESS_BODY_MAX) {
+            snprintf(w->why, sizeof(w->why), "toolong");
+            return -1;
         }
+        memcpy(buf + len, s[i]->b, s[i]->len);
+        len += s[i]->len;
     }
     wire_run_count++;
     return harness_meter_wire(buf, len, ecx, eflags, x87, seeds, nseeds, mm0, w);
+}
+
+static int
+wire_body(const ins_t *unit, int nunit, int copies, uint32_t ecx, uint32_t eflags, const meter_x87_t *x87,
+          const meter_seed_t *seeds, int nseeds, uint64_t mm0, meter_wire_t *w)
+{
+    static const ins_t *s[NWARM + STREAM_MAX * UNIT_MAX];
+    int                 n = 0;
+
+    for (int i = 0; i < NWARM; i++)
+        s[n++] = &warm[i];
+    for (int c = 0; (c < copies) && (n + nunit <= NWARM + STREAM_MAX * UNIT_MAX); c++) {
+        for (int i = 0; i < nunit; i++)
+            s[n++] = &unit[i];
+    }
+    return wire_insts(s, n, ecx, eflags, x87, seeds, nseeds, mm0, w);
 }
 
 /* MM0 as the run starts it: 0 (harness_meter_wire()), or 1.0 in both
@@ -3444,16 +3606,18 @@ rep_with_count(const ins_t *unit, int nunit, uint32_t ecx)
    For a row holding a conditional branch, ctx is also taken on the other
    path (ctx_alt): which of the two the run matches says the path it took.
    The run times each instance in its wire_form(), the flags and ECX set by
-   path_state() for a named path. */
+   path_state() for a named path. frame 0 or 1: ctx and wire are the
+   instance alone in single_stream()'s frame, with it minus without it. */
 static void
 measure(const ins_t *unit, int nunit, int single, int lo, int hi, int div, int path, int run_wire, const char *cond,
-        meas_t *m)
+        int frame, meas_t *m)
 {
     static const ins_t *stream[STREAM_MAX * UNIT_MAX];
     ins_t               wunit[UNIT_MAX];
     walk_t              w;
     walk_t              wb_walk = { 0 };
     int                 cond_op = 0; /* a branch, CMOVcc or SETcc whose path the row names */
+    int                 ahead   = 0; /* single_stream()'s separators ahead */
     int                 taken  = (path == 1);
     uint32_t            eflags = 0x0002;
     uint32_t            ecx    = 1;
@@ -3511,19 +3675,40 @@ measure(const ins_t *unit, int nunit, int single, int lo, int hi, int div, int p
         snprintf(m->why, sizeof(m->why), "nopath"); /* LOOPcc: its path moves with ECX copy by copy */
         return;
     }
-    n = build(NULL, 0, wunit, nunit, lo, 1, stream);
-    if (!drive(stream, n, taken, 1, &a)) {
-        n = build(NULL, 0, wunit, nunit, hi, 1, stream);
+    /* a copy ahead that ends a block (an MMX op entering MMX mode) moves
+       the timed instance off the limit: another count of separators puts
+       it back, the fewest that do */
+    if (frame >= 0) {
+        const int amax = single_ahead_max(wunit, nunit);
+
+        for (int k = 1; k <= 2 * MAX_INSTRUCTION_COUNT; k++) {
+            ahead           = (k == 1) ? amax : k;
+            n               = single_stream(wunit, nunit, ahead, 1, frame, 1, stream);
+            drive_mark      = single_at;
+            drive_mark_last = 0;
+            if ((n >= 0) && (drive(stream, n, taken, 1, &b) || drive_mark_last))
+                break;
+            ahead = amax;
+        }
+        drive_mark = -1;
+    }
+    n = (frame < 0) ? build(NULL, 0, wunit, nunit, lo, 1, stream) : single_stream(wunit, nunit, ahead, 0, frame, 1, stream);
+    if ((n >= 0) && !drive(stream, n, taken, 1, &a)) {
+        n = (frame < 0) ? build(NULL, 0, wunit, nunit, hi, 1, stream) : single_stream(wunit, nunit, ahead, 1, frame, 1, stream);
+        drive_mark      = (frame < 0) ? -1 : single_at;
+        drive_mark_last = 0;
         if (!drive(stream, n, taken, 1, &b)) {
+            m->alone   = drive_mark_last;
             m->has_ctx = 1;
             m->ctx_t   = b - a;
             m->ctx     = per_x100(m->ctx_t, div);
         }
+        drive_mark = -1;
     }
     if (m->cond_branch) {
-        n = build(NULL, 0, wunit, nunit, lo, 1, stream);
-        if (!drive(stream, n, !taken, 1, &a)) {
-            n = build(NULL, 0, wunit, nunit, hi, 1, stream);
+        n = (frame < 0) ? build(NULL, 0, wunit, nunit, lo, 1, stream) : single_stream(wunit, nunit, ahead, 0, frame, 1, stream);
+        if ((n >= 0) && !drive(stream, n, !taken, 1, &a)) {
+            n = (frame < 0) ? build(NULL, 0, wunit, nunit, hi, 1, stream) : single_stream(wunit, nunit, ahead, 1, frame, 1, stream);
             if (!drive(stream, n, !taken, 1, &b)) {
                 m->has_ctx_alt = 1;
                 m->ctx_alt     = per_x100(b - a, div);
@@ -3556,8 +3741,19 @@ measure(const ins_t *unit, int nunit, int single, int lo, int hi, int div, int p
             snprintf(m->why, sizeof(m->why), "x87depth");
             return;
         }
-        if (wire_body(wunit, nunit, lo, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wa)
-            || wire_body(wunit, nunit, hi, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wb)) {
+        if (frame >= 0) {
+            static const ins_t *s0[STREAM_MAX * UNIT_MAX];
+            static const ins_t *s1[STREAM_MAX * UNIT_MAX];
+            const int           n0 = single_stream(wunit, nunit, ahead, 0, frame, 0, s0);
+            const int           n1 = single_stream(wunit, nunit, ahead, 1, frame, 0, s1);
+
+            if ((n0 < 0) || wire_insts(s0, n0, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wa)
+                || wire_insts(s1, n1, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wb)) {
+                snprintf(m->why, sizeof(m->why), "%s", wa.why[0] ? wa.why : wb.why[0] ? wb.why : "noroom");
+                return;
+            }
+        } else if (wire_body(wunit, nunit, lo, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wa)
+                   || wire_body(wunit, nunit, hi, ecx, eflags, xs ? &x87 : NULL, &sd, xs ? 1 : 0, mm0, &wb)) {
             snprintf(m->why, sizeof(m->why), "%s", wa.why[0] ? wa.why : wb.why);
             return;
         }
@@ -3923,6 +4119,39 @@ run_rejected(const char *cond, const meas_t *m)
     return 0;
 }
 
+/* A row's unit measured (measure()), a prefix row as its prefixed
+   carrier minus the carrier: the difference of the totals, then per
+   copy. */
+static void
+measure_unit(const ins_t *unit, int nunit, const ins_t *carrier, const ins_t *pfx, int single, int lo, int hi, int div,
+             int path, int run, const char *cond, int frame, meas_t *m)
+{
+    meas_t mc;
+
+    if (!carrier) {
+        measure(unit, nunit, single, lo, hi, div, path, run, cond, frame, m);
+        return;
+    }
+    measure(pfx, 1, single, lo, hi, div, path, run, cond, frame, m);
+    measure(carrier, 1, single, lo, hi, div, path, run, cond, frame, &mc);
+    if (m->has_model && !mc.has_model)
+        snprintf(m->mwhy, sizeof(m->mwhy), "%s", mc.mwhy);
+    m->has_model &= mc.has_model;
+    m->model_t -= mc.model_t;
+    m->model = per_x100(m->model_t, m->mdiv);
+    m->has_ctx &= mc.has_ctx;
+    m->alone &= mc.alone;
+    m->ctx_t -= mc.ctx_t;
+    m->ctx = per_x100(m->ctx_t, div);
+    if (m->has_wire && !mc.has_wire)
+        snprintf(m->why, sizeof(m->why), "%s", mc.why);
+    m->has_wire &= mc.has_wire;
+    m->wc_t -= mc.wc_t;
+    m->wi_t -= mc.wi_t;
+    m->wc = per_x100(m->wc_t, div);
+    m->wi = per_x100(m->wi_t, div);
+}
+
 /* ---- one row --------------------------------------------------------- */
 
 static void
@@ -3980,6 +4209,8 @@ meter_row(const row_t *r, const char *target, int no_wire, int rider, int nobook
     int64_t     xc        = 0;
     const char *why_un    = NULL; /* an unscored row's reason */
     const char *dep_why   = NULL;
+    int         frame_dep = 0; /* a single row's charge differs between the two frames */
+    char        frame_why[96];
 
     memset(&m, 0, sizeof(m));
     memset(&om, 0, sizeof(om));
@@ -4095,7 +4326,7 @@ meter_row(const row_t *r, const char *target, int no_wire, int rider, int nobook
         if (is_rep) {
             meas_t z;
 
-            measure(unit, 1, 1, 2, 3, 1, path, 0, cond, &m);
+            measure(unit, 1, 1, 2, 3, 1, path, 0, cond, -1, &m);
             if (run && !rep_fixed) {
                 measure_rep(unit, rep1, rep2, &z);
                 m.has_wire = z.has_wire;
@@ -4176,29 +4407,48 @@ meter_row(const row_t *r, const char *target, int no_wire, int rider, int nobook
                 x87_fit(form, nunit, per, lo, &hi);
                 div = (hi - lo) * (per_ins ? nx : 1);
             }
-            if (carrier) {
-                meas_t mc;
+            if (single && strcmp(model_name, "486") && strcmp(model_name, "pentium") && strcmp(model_name, "686") &&
+                strcmp(model_name, "winchip") && strcmp(model_name, "winchip2")) {
+                /* an out-of-order model (single_stream()): the copies'
+                   figures are shown, not scored; a row with no run is
+                   scored from the empty block as before */
+                measure_unit(unit, nunit, carrier, &pfx, single, lo, hi, div, path, run, cond, -1, &m);
+                if (m.has_ctx || m.has_wire) {
+                    snprintf(frame_why, sizeof(frame_why), "out-of-order-model-no-isolated-instance");
+                    frame_dep = 1;
+                }
+            } else if (single) {
+                meas_t m1;
 
-                /* the difference of the totals, then per copy */
-                measure(&pfx, 1, single, lo, hi, div, path, run, cond, &m);
-                measure(carrier, 1, single, lo, hi, div, path, run, cond, &mc);
-                if (m.has_model && !mc.has_model)
-                    snprintf(m.mwhy, sizeof(m.mwhy), "%s", mc.mwhy);
-                m.has_model &= mc.has_model;
-                m.model_t -= mc.model_t;
-                m.model = per_x100(m.model_t, m.mdiv);
-                m.has_ctx &= mc.has_ctx;
-                m.ctx_t -= mc.ctx_t;
-                m.ctx = per_x100(m.ctx_t, div);
-                if (m.has_wire && !mc.has_wire)
-                    snprintf(m.why, sizeof(m.why), "%s", mc.why);
-                m.has_wire &= mc.has_wire;
-                m.wc_t -= mc.wc_t;
-                m.wi_t -= mc.wi_t;
-                m.wc = per_x100(m.wc_t, div);
-                m.wi = per_x100(m.wi_t, div);
+                /* the instance alone (single_stream()): its figure must be
+                   the isolated block's (model); the two frames' agreement
+                   is counted */
+                measure_unit(unit, nunit, carrier, &pfx, single, lo, hi, div, path, run, cond, 0, &m);
+                measure_unit(unit, nunit, carrier, &pfx, single, lo, hi, div, path, run, cond, 1, &m1);
+                if (!whole_insns(form, carrier ? 1 : nunit)) {
+                    /* its opcode lies past its bytes: the instance takes
+                       the next one's bytes, whatever follows it */
+                    snprintf(frame_why, sizeof(frame_why), "instance-not-a-whole-instruction");
+                    frame_dep = 1;
+                } else if (m.has_ctx && !m.alone) {
+                    snprintf(frame_why, sizeof(frame_why), "instance-shares-its-block");
+                    frame_dep = 1;
+                } else if (m.has_ctx && m.has_model && (m.ctx_t != m.model_t)) {
+                    char c0[24];
+                    char m0[24];
+
+                    fmt_x100(c0, sizeof(c0), m.ctx_t * 100);
+                    fmt_x100(m0, sizeof(m0), m.model_t * 100);
+                    snprintf(frame_why, sizeof(frame_why), "alone-not-isolated-block(ctx=%s,model=%s)", c0, m0);
+                    frame_dep = 1;
+                }
+                if ((m.has_ctx != m1.has_ctx) || (m.has_ctx && (m.ctx_t != m1.ctx_t)) || (m.has_wire != m1.has_wire) ||
+                    (m.has_wire && (m.wc_t != m1.wc_t)))
+                    frame_diff_count++;
+                else if (m.has_ctx || m.has_wire)
+                    frame_same_count++;
             } else
-                measure(unit, nunit, single, lo, hi, div, path, run, cond, &m);
+                measure_unit(unit, nunit, carrier, &pfx, single, lo, hi, div, path, run, cond, -1, &m);
             /* What compiled code charges beyond the model (off_model()),
                in the model's figure and in ctx's; a misaligned row's figure
                is the penalty alone (misaligned_penalty()). A prefix row's
@@ -4284,7 +4534,9 @@ meter_row(const row_t *r, const char *target, int no_wire, int rider, int nobook
                     fig = xm;
                     src = "reproduced=penalty";
                 }
-            } else if (m.has_wire && m.cond_branch && strcmp(gap, "=") && strcmp(gap, "=ctx"))
+            } else if (frame_dep)
+                why_un = om.why[0] ? om.why : frame_why;
+            else if (m.has_wire && m.cond_branch && strcmp(gap, "=") && strcmp(gap, "=ctx"))
                 why_un = "branch-path-not-shown";
             else if (m.has_wire) {
                 fig = m.wc;
@@ -4561,6 +4813,8 @@ meter_run(const char *book, const char *aliases, int all_rows, int no_wire, int 
     printf("COUNT\t%s\tSEED-MM0\t%d\n", target, seed_mm0_count);
     printf("COUNT\t%s\tWIRE-NORUN\t%d\n", target, norun_count);
     printf("COUNT\t%s\tWIRE-RUNS\t%d\n", target, wire_run_count);
+    printf("COUNT\t%s\tFRAME-SAME\t%d\n", target, frame_same_count);
+    printf("COUNT\t%s\tFRAME-DIFF\t%d\n", target, frame_diff_count);
     for (int i = 0; i < nrows; i++) {
         free(rows[i].id);
         free(rows[i].own);
