@@ -118,9 +118,11 @@ static int *opcode_timings_486_0f_mod3[256] = {
     // clang-format on
 };
 
+/*SHL/SAL of memory by 1, CL or an immediate: 4 clocks (Intel486 DX data book,
+  Oct 1992, p152).*/
 static int *opcode_timings_486_shift[8] = {
     // clang-format off
-        CYCLES(7),      CYCLES(7),      CYCLES(10),     CYCLES(10),     CYCLES(7),      CYCLES(7),      CYCLES(7),      CYCLES(7)
+        CYCLES(7),      CYCLES(7),      CYCLES(10),     CYCLES(10),     CYCLES(4),      CYCLES(7),      CYCLES(7),      CYCLES(7)
 };
 static int *opcode_timings_486_shift_mod3[8] = {
 // clang-format off
