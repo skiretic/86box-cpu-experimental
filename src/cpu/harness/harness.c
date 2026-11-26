@@ -32,6 +32,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -626,6 +627,12 @@ setup_machine(int softfloat, int fast_fpu_env)
        the recompiler only does so under the accurate FPU environment option,
        so the comparison runs with it on unless the fast mode is under test. */
     cpu_dyn_accurate_fpu_env = !fast_fpu_env;
+
+    /* The x87 ops' power-of-two table (cpu.c, read by FXTRACT), filled as
+       the emulator's startup fills it (86box.c). */
+    extern double exp_pow_table[0x800];
+    for (int c = 0; c <= 0x7ff; c++)
+        exp_pow_table[c] = pow(2.0, (double) (c - 1023));
 
     step("mem_init");
     mem_init();
