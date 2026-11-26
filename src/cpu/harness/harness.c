@@ -70,8 +70,17 @@
 #include "harness.h"
 #include "harness_dbg.h"
 #include "harness_pg.h"
+#include "meter.h"
 
 int harness_verbose = 0;
+
+void (*harness_fatal_hook)(const char *msg) = NULL;
+
+/* --meter: the case being run is the meter's, and its deltas go here. Its
+   stack page starts as meter_stack, not zeroed, when meter_stack_set. */
+static meter_wire_t *meter_wire = NULL;
+static uint8_t       meter_stack[HARNESS_PAGE];
+static int           meter_stack_set = 0;
 
 static const harness_case_t *cur_case  = NULL;
 static const char           *cur_phase = "setup";
@@ -147,6 +156,8 @@ static const char *list_hex_name;
 void
 harness_fatal(const char *msg)
 {
+    if (harness_fatal_hook)
+        harness_fatal_hook(msg);
     fprintf(stderr, "FATAL from the core during %s: %s\n", cur_phase, msg);
     if (cur_case) {
         fprintf(stderr, "  case: %s\n", cur_case->label);
@@ -799,6 +810,8 @@ load_case(const harness_case_t *c, int with_code)
     }
     memcpy(ram + HARNESS_DATA, c->data, HARNESS_PAGE);
     memset(ram + HARNESS_STACK, 0, HARNESS_PAGE);
+    if (meter_wire && meter_stack_set)
+        memcpy(ram + HARNESS_STACK, meter_stack, HARNESS_PAGE);
     memset(ram + HARNESS_RECORD, 0, HARNESS_PAGE);
     /* Put back without the CPU writing them: a block compiled from code a
        run wrote there would otherwise survive the reload. */
@@ -1523,6 +1536,33 @@ run_case(const harness_case_t *c)
             wrote_code = r + 1;
     }
 
+    /* The meter reads the deltas and prints its own line. */
+    if (meter_wire) {
+        int bad = 0;
+
+        meter_wire->why[0] = 0;
+        for (int r = 1; r < nruns && !bad; r++)
+            bad = compare_silent(&st[0], &st[r]);
+        if (st[0].status != RUN_HALTED)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "%s", status_names[st[0].status]);
+        else if (st[0].vector != 0xffffffff)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "fault%02x", st[0].vector);
+        else if ((st[0].pc + cpu_state.seg_cs.base) != (HARNESS_CODE + code_len - 1))
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "noepilogue"); /* jumped away or halted early */
+        else if (harness_fault || wrote_code)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "harness");
+        else if (!converged)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "notconv");
+        else if (bad)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "state");
+        else if (st[compiled + 1].tsc_delta != st[compiled].tsc_delta)
+            snprintf(meter_wire->why, sizeof(meter_wire->why), "timing");
+        meter_wire->interp   = st[0].tsc_delta;
+        meter_wire->compiled = converged ? st[compiled].tsc_delta : 0;
+        cur_case             = NULL;
+        return meter_wire->why[0] ? 1 : 0;
+    }
+
     if (quiet) {
         int bad = !converged || wrote_code || harness_fault;
         for (int r = 1; r < nruns && !bad; r++)
@@ -1605,6 +1645,100 @@ default_case(harness_case_t *c)
     strcpy(c->label, "hand");
 }
 
+/* A meter body as a hand case. EAX and EBP point into pages the meter's
+   warm-up touches (EAX at a data page dword that holds its own address, so
+   a chain of mov eax,[eax] stays there; EBP into the stack page, for
+   LEAVE); ECX as given (a count, a shift by CL, a divisor); EDX 0 (a
+   divide's high half); the flags as given (a branch's path). MM1 holds
+   1.0 in both single lanes and MM0 mm0, which the meter makes 0 but for
+   a PFRCP or PFRSQRT that reads MM0 (1.0 there): a 3DNow! row's chain on
+   MM0 then keeps normal operands (infinities and NaNs are unsupported
+   operands with undefined results, AMD 21928G p. 10), and a compare chain
+   (PFCMPEQ, PFCMPGE, PFCMPGT) stays false instead of feeding its all-ones
+   mask back as a NaN. */
+#define METER_EAX (HARNESS_DATA + 0x100)
+#define METER_MM1 0x3f8000003f800000ull
+
+/* The page a seed lands in, or NULL: the data page, the stack page, or an
+   extra page (an address outside both, such as a 16-bit one), zeroed. */
+static uint8_t *
+meter_seed_page(harness_case_t *c, uint32_t addr)
+{
+    const uint32_t phys = addr & ~(HARNESS_PAGE - 1);
+
+    if (phys == HARNESS_DATA)
+        return c->data;
+    if (phys == HARNESS_STACK) {
+        meter_stack_set = 1;
+        return meter_stack;
+    }
+    if ((phys < HARNESS_PAGES_LOW) || (phys >= 0x20000))
+        return NULL;
+    for (int i = 0; i < c->pages_nr; i++) {
+        if (c->pages[i].phys == phys)
+            return c->pages[i].bytes;
+    }
+    if (c->pages_nr == HARNESS_PAGES_MAX)
+        return NULL;
+    c->pages[c->pages_nr].phys = phys;
+    memset(c->pages[c->pages_nr].bytes, 0, HARNESS_PAGE);
+    return c->pages[c->pages_nr++].bytes;
+}
+
+int
+harness_meter_wire(const uint8_t *body, int len, uint32_t ecx, uint32_t eflags, const meter_x87_t *x87,
+                   const meter_seed_t *seeds, int nseeds, uint64_t mm0, meter_wire_t *w)
+{
+    static harness_case_t c;
+
+    default_case(&c);
+    c.regs[0] = METER_EAX;
+    c.regs[1] = ecx;
+    c.regs[2] = 0;
+    c.eflags  = eflags;
+    c.regs[5] = HARNESS_STACK + 0x800;
+    c.mm[0]   = mm0;
+    c.mm[1]   = METER_MM1;
+    for (int i = 0; i < 4; i++)
+        c.data[(METER_EAX - HARNESS_DATA) + i] = (uint8_t) (METER_EAX >> (8 * i));
+    if (x87) {
+        c.npxc = x87->npxc;
+        c.top  = x87->top;
+        for (int i = 0; i < 8; i++) {
+            c.tag[i] = x87->tag[i];
+            c.st[i]  = x87->st[i];
+        }
+    }
+    memset(meter_stack, 0, HARNESS_PAGE);
+    meter_stack_set = 0;
+    for (int s = 0; s < nseeds; s++) {
+        uint8_t *page = (seeds[s].plen > 0) ? meter_seed_page(&c, seeds[s].addr) : NULL;
+
+        for (uint32_t i = 0, off = seeds[s].addr & (HARNESS_PAGE - 1); page && (i < (uint32_t) seeds[s].len) && (off < HARNESS_PAGE);
+             i++, off++)
+            page[off] = seeds[s].pat[i % seeds[s].plen];
+    }
+    memcpy(c.body, body, len);
+    c.body_len = len;
+    strcpy(c.label, "meter");
+    memset(w, 0, sizeof(*w));
+    /* What the model holds from the meter's own drives or the last case's
+       compile, as --list's reset_machine() clears it. */
+    if (codegen_timing_load)
+        codegen_timing_load(NULL);
+    meter_wire = w;
+    run_case(&c);
+    meter_wire = NULL;
+    return w->why[0] ? -1 : 0;
+}
+
+void
+harness_meter_frame(uint8_t *pre, int *npre, uint8_t *epi, int *nepi)
+{
+    *npre = emit_prelude(pre, 0);
+    *nepi = emit_epilogue(epi, 0);
+}
+
 static int
 parse_hex(const char *s, uint8_t *out, int max)
 {
@@ -1664,7 +1798,15 @@ usage(void)
             "                       the two files get what --hex with the hex file's text and the\n"
             "                       other options given here prints, when the case has finished\n"
             "                       (until then it is <stdout file>.part, <stderr file>.part);\n"
-            "                       not with --verbose\n",
+            "                       not with --verbose\n"
+            "  --meter <book.tsv>   the timing-model meter on this CPU: every row of the book file\n"
+            "                       whose parts name it, model charge and compiled / interpreted\n"
+            "                       TSC deltas against the book (meter.c)\n"
+            "  --meter-parts <list> more part names (comma separated) that count as this CPU\n"
+            "  --meter-all          every row of the book, whatever its parts\n"
+            "  --meter-nowire       model figures only, no end-to-end runs\n"
+            "  --meter-rider        this CPU has no book of its own: rows are measured, not scored\n"
+            "  --meter-nobook       no book speaks for this CPU's timing model: every verdict is NO-BOOK\n",
             HARNESS_PAGES_MAX, harness_gen_class_names(), MAX_RUNS);
     harness_dbg_usage();
     harness_pg_usage();
@@ -2260,6 +2402,12 @@ main(int argc, char **argv)
     int             total      = 0;
     int             r;
     const char     *list       = NULL;
+    const char     *meter_book = NULL;
+    const char     *meter_parts = NULL;
+    int             meter_all  = 0;
+    int             meter_nowire = 0;
+    int             meter_rider = 0;
+    int             meter_nobook = 0;
 
     default_case(c);
     for (int i = 1; i < argc; i++) {
@@ -2352,6 +2500,18 @@ main(int argc, char **argv)
             truncate_to = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--verbose")) {
             harness_verbose = 1;
+        } else if (!strcmp(argv[i], "--meter") && i + 1 < argc) {
+            meter_book = argv[++i];
+        } else if (!strcmp(argv[i], "--meter-parts") && i + 1 < argc) {
+            meter_parts = argv[++i];
+        } else if (!strcmp(argv[i], "--meter-all")) {
+            meter_all = 1;
+        } else if (!strcmp(argv[i], "--meter-nowire")) {
+            meter_nowire = 1;
+        } else if (!strcmp(argv[i], "--meter-rider")) {
+            meter_rider = 1;
+        } else if (!strcmp(argv[i], "--meter-nobook")) {
+            meter_nobook = 1;
         } else if (!strcmp(argv[i], "--list") && i + 1 < argc) {
             list = argv[++i];
         } else if (harness_dbg_option(argv[i])) {
@@ -2364,8 +2524,13 @@ main(int argc, char **argv)
             return 2;
         }
     }
-    /* A list is the whole run: its cases are hand bodies of their own. */
-    if ((!have_body && !have_seeds && !list) || (list && (have_body || have_seeds))) {
+    /* A list is the whole run: its cases are hand bodies of their own. So is
+       the meter's book. */
+    if (meter_book && (have_body || have_seeds || list)) {
+        usage();
+        return 2;
+    }
+    if ((!have_body && !have_seeds && !list && !meter_book) || (list && (have_body || have_seeds))) {
         usage();
         return 2;
     }
@@ -2398,6 +2563,13 @@ main(int argc, char **argv)
         }
     }
 
+    if (meter_book) {
+        quiet = 1;
+        r     = meter_run(meter_book, meter_parts, meter_all, meter_nowire, meter_rider, meter_nobook, machine_family,
+                      machine_cpu_name);
+        free(c);
+        return r;
+    }
     if (list) {
         r = run_list(list, c, mode16);
         free(c);

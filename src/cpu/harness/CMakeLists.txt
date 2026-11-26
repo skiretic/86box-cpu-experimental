@@ -19,6 +19,15 @@ add_executable(cpu_harness
     harness_tsc.c
     gen.c
     harness_pg.c
+    meter.c
+    meter_struct_486.c
+    meter_struct_pentium.c
+    meter_struct_686.c
+    meter_struct_p6.c
+    meter_struct_k6.c
+    meter_struct_winchip.c
+    meter_struct_winchip2.c
+    meter_struct_x87.c
     stubs.c
     ${CMAKE_SOURCE_DIR}/src/io.c
     ${CMAKE_SOURCE_DIR}/src/mem/mem.c
