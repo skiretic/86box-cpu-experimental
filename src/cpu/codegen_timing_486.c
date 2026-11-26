@@ -284,9 +284,11 @@ static int *opcode_timings_486_8x[8] = {
         &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_rm
     // clang-format on
 };
+/*ADD, AND, SUB and CMP of an immediate with a register: 1 clock (Intel486 DX
+  data book, Oct 1992, p150).*/
 static int *opcode_timings_486_8x_mod3[8] = {
     // clang-format off
-        &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_rm
+        &timing_rr,     &timing_mr,     &timing_mr,     &timing_mr,     &timing_rr,     &timing_rr,     &timing_mr,     &timing_rr
     // clang-format on
 };
 static int *opcode_timings_486_81[8] = {
