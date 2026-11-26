@@ -20,13 +20,15 @@
 
 /*The prefix bytes' entries are what codegen_timing_486_prefix() charges.
   ES:, CS: and FS: take 1 clock (Intel486 DX data book, Oct 1992, p157).
-  The operand size prefix takes 1 clock (same page).*/
+  The operand size prefix takes 1 clock (same page).
+  CMP of memory with a 16/32-bit register (39) only reads memory: 2 clocks
+  (p150).*/
 static int *opcode_timings_486[256] = {
     // clang-format off
 /*00*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      CYCLES(3),      &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      NULL,
 /*10*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      CYCLES(3),      &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(2),      CYCLES(3),
 /*20*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(1),      CYCLES(3),      &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(1),      CYCLES(3),
-/*30*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(4),      CYCLES(2),      &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(4),      CYCLES(2),
+/*30*/  &timing_mr,     &timing_mr,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(4),      CYCLES(2),      &timing_mr,     &timing_rm,     &timing_rm,     &timing_rm,     &timing_rr,     &timing_rr,     CYCLES(4),      CYCLES(2),
 
 /*40*/  &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,     &timing_rr,
 /*50*/  CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),      CYCLES(1),
